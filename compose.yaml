@@ -9,6 +9,24 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
     volumes:
       - exam-data:/app/data
+    labels:
+      observability.monitor: "true"
+      observability.logs: "true"
+      observability.service: exam-studio
+      observability.environment: local
+      observability.team: product
+      observability.probe: "true"
+      observability.probe-scheme: http
+      observability.probe-port: "8000"
+      observability.probe-path: /api/health
+      observability.os-track: "true"
+      observability.os-id: debian
+      observability.os-version: "12"
+      observability.os-lifecycle-product: debian
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]

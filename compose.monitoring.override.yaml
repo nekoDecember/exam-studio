@@ -1,0 +1,12 @@
+# Optional: start monitoring-starter first to create the shared network.
+services:
+  app:
+    networks:
+      default: {}
+      observability:
+        aliases:
+          - origin-exam-studio
+networks:
+  observability:
+    external: true
+    name: ${OBSERVABILITY_NETWORK:-observability}

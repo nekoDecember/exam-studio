@@ -1,0 +1,15 @@
+# Cloudflare Access and the dedicated public network are owned by public-gateway.
+services:
+  app:
+    ports: !reset []
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL}
+    networks:
+      default: {}
+      observability:
+        aliases:
+          - origin-exam-studio
+networks:
+  observability:
+    external: true
+    name: ${OBSERVABILITY_NETWORK:-observability}

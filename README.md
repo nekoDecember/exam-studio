@@ -106,3 +106,30 @@ CIではAPI・保存・採点・資料解析・OCR・AIアダプタ契約のテ�
 このリポジトリはアプリのソースと架空のサンプルだけを公開します。登録原本、DB、演習記録、`.env`、APIキーはGit管理対象外です。アプリ自体には認証を設けず、Composeの公開ポートを `127.0.0.1` に限定しています。認証を追加せずにインターネットへホストしないでください。
 
 ソース構成・設計上の制約は [docs/architecture.md](docs/architecture.md)、検証記録は [docs/verification.md](docs/verification.md) を参照してください。
+
+## 既存基盤への登録
+
+`public-gateway` の公開サービス・リポジトリCSVに `exam-studio` として登録しています。
+公開先は `https://exam.nekodec.party`（`SANDBOX_DOMAIN=nekodec.party`）、Accessは既存の `owner` ポリシーです。
+このURLは公開先として予約した設定です。DNS・Access・Tunnelは管理用認証がある端末で反映してください。
+公開用Composeはホストポートを削除し、Gatewayが専用の `public-exam-studio` networkを付与します。
+DNS・Access・Tunnelへの実反映は、設定済みの管理端末でTerraform plan確認後に実施します。
+
+監視は `observability` network経由の `/api/health` HTTP probe、Dockerのhealth・リソース・OS情報、Alloy/Lokiのログを使用します。
+`monitoring-starter` の全体起動一覧・Prometheusの固定ターゲットにも登録しています。
+単体起動では外部networkを要求しません。監視だけを有効にしてローカルポートも残す場合：
+
+```sh
+# monitoring-starterが起動し、observability networkが存在する状態で実行
+docker compose -f compose.yaml -f compose.monitoring.override.yaml up -d --build
+```
+
+Cloudflareで公開する場合は、設定済みの `public-gateway` で実行します。
+
+```sh
+make apps-up APPS=exam-studio
+make gateway-up
+# 続いてCloudflareのplan/apply（既存stateと認証がある管理端末で）
+```
+
+監視上のサービス名は `exam-studio` です。GrafanaのEnvironmentは `local` を選択します。
