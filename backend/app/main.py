@@ -128,14 +128,26 @@ def edit_recipe(id: str, r: Recipe):
 
 @app.post("/api/uploads")
 def upload(
-    file: UploadFile = File(...), kind: str = Form("materials"), year: str = Form("")
+    file: UploadFile = File(...),
+    kind: str = Form("materials"),
+    year: str = Form(""),
+    analysis_method: str = Form("standard"),
 ):
     if kind not in ("materials", "exams"):
         raise HTTPException(422, "登録先が不正です")
+    if analysis_method not in ("standard", "multimodal"):
+        raise HTTPException(422, "解析方式が不正です")
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(
             415, "PDF / XLSX / PNG / JPEG / WebP / UTF-8 TXT に対応しています"
+        )
+    if analysis_method == "multimodal" and suffix != ".pdf":
+        raise HTTPException(422, "LLMマルチモーダル解析はPDFで利用してください")
+    if analysis_method == "multimodal" and provider().name != "openai":
+        raise HTTPException(
+            503,
+            "LLMマルチモーダル解析にはLLM_PROVIDER=openaiとOPENAI_API_KEYが必要です",
         )
     id = db.uid()
     directory = db.DATA / "uploads"
@@ -149,7 +161,11 @@ def upload(
                 if total > 20 * 1024 * 1024:
                     raise HTTPException(413, "ファイルは20MB以内にしてください")
                 dest.write(block)
-        chunks = parse(path)
+        chunks = (
+            ai_call(provider().extract_pdf, path)
+            if analysis_method == "multimodal"
+            else parse(path)
+        )
     except HTTPException:
         path.unlink(missing_ok=True)
         raise
@@ -196,7 +212,8 @@ def upload(
             "categories": categories,
             "questions": questions,
             "warnings": warnings,
-            "analysis_method": provider().name,
+            "analysis_method": analysis_method,
+            "analysis_provider": provider().name,
         },
     )
 

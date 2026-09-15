@@ -52,6 +52,7 @@ type Page =
   | "exams"
   | "recipes"
   | "analytics";
+type AnalysisMethod = "standard" | "multimodal";
 const empty: Data = {
   questions: [],
   materials: [],
@@ -70,6 +71,13 @@ const nav: [Page, string, typeof BookOpen][] = [
   ["recipes", "出題レシピ", SlidersHorizontal],
   ["analytics", "学習の記録", ChartNoAxesCombined],
 ];
+function documentAnalysisLabel(doc: Doc) {
+  if (doc.analysis_method === "multimodal")
+    return "LLMマルチモーダル（PDF画像優先）";
+  if (doc.analysis_provider === "openai" || doc.analysis_method === "openai")
+    return "標準抽出（PyMuPDF） + AI解析";
+  return "標準抽出（PyMuPDF + ローカルOCR）";
+}
 function App() {
   const [page, setPage] = useState<Page>("home"),
     [data, setData] = useState<Data>(empty),
@@ -88,7 +96,9 @@ function App() {
     [editor, setEditor] = useState<Question | null>(null),
     [doc, setDoc] = useState<Doc | null>(null),
     [recipe, setRecipe] = useState<Recipe | null>(null),
-    [batch, setBatch] = useState(1);
+    [batch, setBatch] = useState(1),
+    [analysisMethod, setAnalysisMethod] =
+      useState<AnalysisMethod>("standard");
   const current = useRef<Attempt | undefined>(undefined),
     writeQueue = useRef(Promise.resolve()),
     generation = useRef(0),
@@ -344,10 +354,15 @@ function App() {
       generation_instruction: "",
     };
   }
-  async function upload(file: File, kind: string) {
+  async function upload(
+    file: File,
+    kind: string,
+    selectedAnalysisMethod: AnalysisMethod,
+  ) {
     const f = new FormData();
     f.append("file", file);
     f.append("kind", kind);
+    f.append("analysis_method", selectedAnalysisMethod);
     const d = await api("/uploads", { method: "POST", body: f });
     await refresh();
     setDoc(d);
@@ -1122,6 +1137,25 @@ function App() {
                         : "過去問は、出題形式・構成・文体の参考に使用します。"
                     }
                   />
+                  <Field label="PDFの解析方式">
+                    <select
+                      value={analysisMethod}
+                      onChange={(e) =>
+                        setAnalysisMethod(e.target.value as AnalysisMethod)
+                      }
+                      disabled={busy}
+                    >
+                      <option value="standard">
+                        標準抽出（PyMuPDF + ローカルOCR）
+                      </option>
+                      <option value="multimodal">
+                        LLMマルチモーダル（PDF画像優先）
+                      </option>
+                    </select>
+                    <span className="muted upload-method-help">
+                      文字化け・複雑なレイアウトには後者が有効です。OpenAI接続とAPI利用料が必要です。
+                    </span>
+                  </Field>
                   <label className={"upload-zone " + (busy ? "disabled" : "")}>
                     <span className="upload-icon">
                       <Upload size={26} />
@@ -1141,7 +1175,10 @@ function App() {
                       accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp,.txt"
                       onChange={(e) => {
                         const f = e.target.files?.[0];
-                        if (f) perform(() => upload(f, page));
+                        if (f)
+                          perform(() =>
+                            upload(f, page, analysisMethod),
+                          );
                         e.target.value = "";
                       }}
                     />
@@ -1751,10 +1788,7 @@ function App() {
               </div>
             ))}
             <p className="muted">
-              解析方式：
-              {doc.analysis_method === "mock"
-                ? "標準抽出（AI未接続）"
-                : "AI解析"}{" "}
+              解析方式：{documentAnalysisLabel(doc)}{" "}
               · 抽出結果は編集して確定できます。
             </p>
             {doc.chunks.map((c, i) => (

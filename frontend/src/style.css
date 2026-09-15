@@ -1021,6 +1021,9 @@ summary {
   font-size: 11px;
   margin-bottom: 18px;
 }
+.upload-method-help {
+  line-height: 1.5;
+}
 .disabled {
   opacity: 0.6;
 }

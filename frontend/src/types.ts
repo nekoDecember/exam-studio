@@ -64,6 +64,7 @@ export type Doc = {
   status: string;
   version: number;
   analysis_method: string;
+  analysis_provider?: string;
 };
 export type Data = {
   questions: Question[];

@@ -3,8 +3,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 from PIL import Image
-from pypdf import PdfReader
 from openpyxl import load_workbook
+import pymupdf
 import pytesseract
 from .db import uid
 
@@ -58,37 +58,41 @@ def parse(path):
                 )
         wb.close()
     elif suffix == ".pdf":
-        reader = PdfReader(path)
-        if len(reader.pages) > 100:
-            raise ValueError("PDFは100ページ以内で登録してください")
-        for index, page in enumerate(reader.pages):
-            text = page.extract_text(extraction_mode="layout") or ""
-            if len(text.strip()) > 20:
-                add(text, page_number=index + 1)
-            else:
-                with tempfile.TemporaryDirectory() as temp:
-                    out = Path(temp) / "page"
-                    subprocess.run(
-                        [
-                            "pdftoppm",
-                            "-f",
-                            str(index + 1),
-                            "-l",
-                            str(index + 1),
-                            "-scale-to",
-                            "2400",
-                            "-singlefile",
-                            "-png",
-                            str(path),
-                            str(out),
-                        ],
-                        check=True,
-                        capture_output=True,
-                        timeout=90,
-                    )
-                    with Image.open(str(out) + ".png") as im:
-                        text, confidence = ocr(im)
-                    add(text, page_number=index + 1, ocr_confidence=confidence)
+        with pymupdf.open(path) as document:
+            if document.page_count > 100:
+                raise ValueError("PDFは100ページ以内で登録してください")
+            for index, page in enumerate(document):
+                text = page.get_text("text", sort=True) or ""
+                if len(text.strip()) > 20:
+                    add(text, page_number=index + 1)
+                else:
+                    with tempfile.TemporaryDirectory() as temp:
+                        out = Path(temp) / "page"
+                        subprocess.run(
+                            [
+                                "pdftoppm",
+                                "-f",
+                                str(index + 1),
+                                "-l",
+                                str(index + 1),
+                                "-scale-to",
+                                "2400",
+                                "-singlefile",
+                                "-png",
+                                str(path),
+                                str(out),
+                            ],
+                            check=True,
+                            capture_output=True,
+                            timeout=90,
+                        )
+                        with Image.open(str(out) + ".png") as im:
+                            text, confidence = ocr(im)
+                        add(
+                            text,
+                            page_number=index + 1,
+                            ocr_confidence=confidence,
+                        )
     else:
         with Image.open(path) as im:
             text, confidence = ocr(im)

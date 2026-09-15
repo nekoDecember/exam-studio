@@ -2,8 +2,8 @@
 
 - `backend/app/db.py`: SQLite、初期マイグレーション、トランザクション。可変の問題構造はJSON payloadとして保存。
 - `backend/app/models.py`: 問題・レシピ・生成条件のPydantic検証。
-- `backend/app/parser.py`: PDF、XLSX、画像、OCR、AI未接続時の過去問構造抽出。
-- `backend/app/providers.py`: LLMProvider、MockProvider、OpenAIProvider。外部接続はこの境界に集約。
+- `backend/app/parser.py`: PyMuPDFによるPDF本文抽出、XLSX、画像、Tesseract OCR、AI未接続時の過去問構造抽出。
+- `backend/app/providers.py`: LLMProvider、MockProvider、OpenAIProvider。外部接続はこの境界に集約。OpenAIProviderは選択時に原本PDFをResponses APIのマルチモーダル入力としてページ単位に転記する。
 - `backend/app/main.py`: API、生成の原子保存、問題編集履歴、ローカル利用のオリジン検査、静的ファイル配信。
 - `frontend/src/store.ts`: IndexedDB、問題の固定スナップショット、ローカル採点、同期。
 - `frontend/src/main.tsx`: ダッシュボード、演習、問題バンク、資料、過去問、レシピ、分析。
@@ -18,7 +18,8 @@
 - 利用者1人、ローカル環境、単一タブでの編集を想定。認証・クラウド同期は未実装。
 - AI生成の意味的な正しさや配点の正確さは保証せず、根拠と警告のレビューを前提とする。
 - MockProviderは画面・保存の動作検証用。AIの代替品質は提供しない。
-- PDF表はレイアウト文字列、XLSX表はセル範囲付きテキスト。スキャンの表セルを厳密に復元する機能はない。
+- 標準抽出のPDF本文はPyMuPDFでページ単位・読み順付きに取得し、本文を取得できないページはTesseract OCRにフォールバックする。PDF表はレイアウト文字列、XLSX表はセル範囲付きテキスト。スキャンの表セルを厳密に復元する機能はない。
+- PDF登録時は標準抽出とLLMマルチモーダル解析を選択できる。後者は文字化け・複雑なレイアウトに有効だが、OpenAI接続、送信コスト、モデルの読み取り誤りがあるため、抽出結果の確認を前提とする。
 - 過去問の複雑な構造は直接編集と詳細JSONで補正可能。
 - 生成は同期HTTP処理。非常に大きな生成ジョブのバックグラウンド化・進捗通知・ジョブ再開は今後の拡張対象。
 - 編集履歴はAPIで参照可能。専用の差分・ロールバック画面は未実装。

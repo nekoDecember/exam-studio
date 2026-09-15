@@ -16,6 +16,7 @@ pillow==12.3.0
 pluggy==1.6.0
 pydantic==2.13.5
 pydantic_core==2.46.5
+pymupdf==1.28.2
 Pygments==2.21.0
 pypdf==6.18.1
 pytesseract==0.3.13

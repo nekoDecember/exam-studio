@@ -44,6 +44,59 @@ def test_openai_adapter_transport(monkeypatch):
     assert OpenAIProvider().classify_material([{"text": "資料"}]) == ["情報管理"]
 
 
+class VisionResponse:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '{"pages":[{"page_number":1,"text":"正しい日本語の本文"}]}',
+                        }
+                    ]
+                }
+            ]
+        }
+
+
+class VisionClient:
+    def __init__(self, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def post(self, url, headers, json):
+        assert url == "https://api.openai.com/v1/responses"
+        content = json["input"][0]["content"]
+        assert content[0]["type"] == "input_file"
+        assert content[0]["filename"] == "source.pdf"
+        assert content[0]["file_data"].startswith("data:application/pdf;base64,")
+        assert content[0]["detail"] == "high"
+        assert content[1] == {
+            "type": "input_text",
+            "text": "このPDFをページ単位で正確に文字起こししてください。",
+        }
+        return VisionResponse()
+
+
+def test_openai_multimodal_pdf_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-not-a-real-key")
+    monkeypatch.setattr("app.providers.httpx.Client", VisionClient)
+    path = tmp_path / "source.pdf"
+    path.write_bytes(b"%PDF-1.4 test")
+    chunks = OpenAIProvider().extract_pdf(path)
+    assert chunks[0]["page_number"] == 1
+    assert chunks[0]["text"] == "正しい日本語の本文"
+
+
 def test_invalid_generation_is_atomic(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DATA", tmp_path)
     monkeypatch.setenv("LLM_PROVIDER", "mock")

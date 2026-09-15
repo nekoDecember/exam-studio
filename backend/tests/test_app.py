@@ -108,6 +108,45 @@ def test_full_workflow(client):
     )
 
 
+def test_multimodal_upload_uses_selected_method(client, monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setattr(
+        "app.providers.OpenAIProvider.extract_pdf",
+        lambda self, path: [
+            {
+                "id": "vision-chunk",
+                "text": "画像から復元した本文",
+                "categories": [],
+                "page_number": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.providers.OpenAIProvider.classify_material",
+        lambda self, chunks: ["情報管理"],
+    )
+    r = client.post(
+        "/api/uploads",
+        files={"file": ("source.pdf", b"%PDF-1.4 test")},
+        data={"kind": "materials", "analysis_method": "multimodal"},
+    )
+    assert r.status_code == 200, r.text
+    document = r.json()
+    assert document["analysis_method"] == "multimodal"
+    assert document["analysis_provider"] == "openai"
+    assert document["chunks"][0]["text"] == "画像から復元した本文"
+    assert document["chunks"][0]["categories"] == ["情報管理"]
+
+
+def test_multimodal_upload_requires_openai(client):
+    r = client.post(
+        "/api/uploads",
+        files={"file": ("source.pdf", b"%PDF-1.4 test")},
+        data={"kind": "materials", "analysis_method": "multimodal"},
+    )
+    assert r.status_code == 503
+
+
 def test_xlsx_and_invalid(client):
     wb = Workbook()
     wb.active.title = "規程"
