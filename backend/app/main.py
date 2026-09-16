@@ -5,14 +5,16 @@ import unicodedata
 from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+
 from . import db
-from .models import Question, Recipe, Generation, Grade
-from .parser import parse, ALLOWED
-from .providers import provider, PROMPT_VERSION
+from .models import Generation, Grade, Question, Recipe
+from .parser import ALLOWED, MAX_CHUNK_CHARS, parse, split_chunks
+from .providers import PROMPT_VERSION, provider
 from .seed import seed
 
 
@@ -24,6 +26,9 @@ async def lifespan(app):
 
 
 app = FastAPI(title="昇格ラボ API", version="1.0.0", lifespan=lifespan)
+
+MAX_ANALYSIS_BATCH_CHARS = 48_000
+MAX_GENERATION_BATCH_CHARS = 60_000
 
 
 @app.middleware("http")
@@ -58,6 +63,32 @@ def ai_call(fn, *args):
         raise HTTPException(
             502, "AI処理に失敗しました。接続設定や応答形式を確認してください"
         ) from e
+
+
+def chunk_batches(chunks, max_chars):
+    batches = []
+    current = []
+    current_size = 0
+    for chunk in chunks:
+        size = len(chunk.get("text", ""))
+        if current and current_size + size > max_chars:
+            batches.append(current)
+            current = []
+            current_size = 0
+        current.append(chunk)
+        current_size += size
+    if current:
+        batches.append(current)
+    return batches
+
+
+def unique_strings(values):
+    result = []
+    for value in values:
+        value = str(value).strip()
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 @app.get("/api/health")
@@ -161,11 +192,12 @@ def upload(
                 if total > 20 * 1024 * 1024:
                     raise HTTPException(413, "ファイルは20MB以内にしてください")
                 dest.write(block)
-        chunks = (
+        extracted_chunks = (
             ai_call(provider().extract_pdf, path)
             if analysis_method == "multimodal"
             else parse(path)
         )
+        chunks = split_chunks(extracted_chunks)
     except HTTPException:
         path.unlink(missing_ok=True)
         raise
@@ -177,25 +209,34 @@ def upload(
             + (str(e) if isinstance(e, ValueError) else ""),
         ) from e
     warnings = []
+    analysis_batches = chunk_batches(chunks, MAX_ANALYSIS_BATCH_CHARS)
     try:
-        categories = (
-            ai_call(provider().classify_material, chunks) if kind == "materials" else []
-        )
-        questions = (
-            ai_call(provider().analyze_past_exam, chunks) if kind == "exams" else []
-        )
+        categories = []
+        questions = []
+        if kind == "materials":
+            for batch in analysis_batches:
+                batch_categories = unique_strings(
+                    ai_call(provider().classify_material, batch)
+                )
+                for c in batch:
+                    c["categories"] = batch_categories
+                categories.extend(batch_categories)
+            categories = unique_strings(categories) or ["未分類"]
+        else:
+            for batch in analysis_batches:
+                questions.extend(ai_call(provider().analyze_past_exam, batch))
     except HTTPException:
         from .parser import analyze
 
         categories = ["未分類"]
         questions = analyze(chunks) if kind == "exams" else []
+        for c in chunks:
+            c["categories"] = categories if kind == "materials" else []
         warnings.append(
             "AI解析に失敗したため抽出結果を保存しました。手動で確認・修正してください。"
         )
-    for c in chunks:
-        c["categories"] = categories
     for q in questions:
-        q.setdefault("id", db.uid())
+        q["id"] = q.get("id") or db.uid()
     for cat in categories:
         category({"name": cat})
     return db.put(
@@ -214,6 +255,13 @@ def upload(
             "warnings": warnings,
             "analysis_method": analysis_method,
             "analysis_provider": provider().name,
+            "chunking": {
+                "max_chars": MAX_CHUNK_CHARS,
+                "source_chunk_count": len(extracted_chunks),
+                "chunk_count": len(chunks),
+                "analysis_batch_count": len(analysis_batches),
+                "auto_split": len(chunks) > len(extracted_chunks),
+            },
         },
     )
 
@@ -239,13 +287,29 @@ def update_document(kind: str, id: str, data: dict):
         raise HTTPException(422, "チャンク形式が不正です")
     if not isinstance(changes.get("categories", []), list):
         raise HTTPException(422, "カテゴリは配列で指定してください")
+    submitted_chunk_count = len(chunks)
+    chunks = split_chunks(chunks)
+    changes["chunks"] = chunks
     questions = changes.get("questions", old["questions"])
     if not isinstance(questions, list) or any(
         not isinstance(q, dict) or not isinstance(q.get("raw_text"), str)
         for q in questions
     ):
         raise HTTPException(422, "過去問にはraw_textが必要です")
-    return db.put(kind, {**old, **changes, "version": old["version"] + 1})
+    chunking = {
+        **old.get("chunking", {}),
+        "max_chars": MAX_CHUNK_CHARS,
+        "chunk_count": len(chunks),
+        "analysis_batch_count": len(
+            chunk_batches(chunks, MAX_ANALYSIS_BATCH_CHARS)
+        ),
+        "auto_split": old.get("chunking", {}).get("auto_split", False)
+        or len(chunks) > submitted_chunk_count,
+    }
+    return db.put(
+        kind,
+        {**old, **changes, "chunking": chunking, "version": old["version"] + 1},
+    )
 
 
 @app.get("/api/documents/{kind}/{id}/file")
@@ -260,19 +324,54 @@ def source_file(kind: str, id: str):
     )
 
 
-def generate(recipe, count=1):
-    chunks = [
+def generation_sources(recipe, source_chunk_ids=None):
+    materials = db.all_items("materials")
+    selected_ids = recipe.get("material_ids") or []
+    if selected_ids:
+        available_ids = {m["id"] for m in materials}
+        missing = [id for id in selected_ids if id not in available_ids]
+        if missing:
+            raise HTTPException(
+                422, "選択した資料が見つかりません。レシピの使用資料を更新してください"
+            )
+        materials = [m for m in materials if m["id"] in selected_ids]
+    chunks = split_chunks([
         {**c, "material_id": m["id"], "material_name": m["name"]}
-        for m in db.all_items("materials")
+        for m in materials
         for c in m["chunks"]
         if recipe["category"] in c.get("categories", m["categories"])
-    ]
+    ])
+    allowed_chunks = set(source_chunk_ids or [])
+    if allowed_chunks:
+        chunks = [
+            c
+            for c in chunks
+            if c["id"] in allowed_chunks
+            or c.get("source_chunk_id") in allowed_chunks
+        ]
     if not chunks:
-        raise HTTPException(422, "対象カテゴリの資料を登録・分類してください")
-    if sum(len(c["text"]) for c in chunks) > 100000:
         raise HTTPException(
-            422, "対象資料が長すぎます。カテゴリを分割してください（10万文字以内）"
+            422,
+            "選択した資料に対象カテゴリの範囲がありません。資料またはカテゴリを確認してください",
         )
+    return chunks
+
+
+def select_source_batches(batches, question_count, set_index):
+    if len(batches) <= question_count:
+        return batches
+    # Spread limited question slots over the entire source. Subsequent sets rotate
+    # the sample so a long document is not permanently truncated at its beginning.
+    indexes = [
+        (int(i * len(batches) / question_count) + set_index) % len(batches)
+        for i in range(question_count)
+    ]
+    return [batches[i] for i in indexes]
+
+
+def generate(recipe, count=1, source_chunk_ids=None):
+    chunks = generation_sources(recipe, source_chunk_ids)
+    source_batches = chunk_batches(chunks, MAX_GENERATION_BATCH_CHARS)
     past = next(
         (
             q
@@ -290,18 +389,48 @@ def generate(recipe, count=1):
     sets = []
     for n in range(count):
         set_id = db.uid()
-        raw = ai_call(provider().generate_question_set, recipe, chunks, style)
-        if len(raw) != recipe["major_count"] * recipe["sub_count"]:
+        question_count = recipe["major_count"] * recipe["sub_count"]
+        selected_batches = select_source_batches(source_batches, question_count, n)
+        allocations = [1] * len(selected_batches)
+        for index in range(question_count - len(selected_batches)):
+            allocations[index % len(allocations)] += 1
+        generated = []
+        for source_batch, allocation in zip(selected_batches, allocations):
+            call_recipe = (
+                recipe
+                if len(selected_batches) == 1
+                else {**recipe, "major_count": 1, "sub_count": allocation}
+            )
+            batch_result = ai_call(
+                provider().generate_question_set, call_recipe, source_batch, style
+            )
+            if len(batch_result) != allocation:
+                raise HTTPException(
+                    422, "生成問題数がレシピと一致しません。再生成してください"
+                )
+            generated.extend((item, source_batch) for item in batch_result)
+        if len(generated) != question_count:
             raise HTTPException(
                 422, "生成問題数がレシピと一致しません。再生成してください"
             )
-        for item in raw:
+        used_chunks = {
+            c["id"]: c for batch in selected_batches for c in batch
+        }
+        scope_warning = ""
+        if len(source_batches) > len(selected_batches):
+            scope_warning = (
+                f"選択資料が長いため、全{len(chunks)}チャンク中"
+                f"{len(used_chunks)}チャンクをこのセットの生成対象にしました。"
+                "複数セットを生成すると対象範囲を分散します。"
+            )
+        for item_index, (item, item_chunks) in enumerate(generated):
             refs = []
             warnings = list(item.get("warnings", []))
+            if scope_warning:
+                warnings.append(scope_warning)
+            item_chunk_map = {c["id"]: c for c in item_chunks}
             for ref in item.get("source_references", []):
-                chunk = next(
-                    (c for c in chunks if c["id"] == ref.get("chunk_id")), None
-                )
+                chunk = item_chunk_map.get(ref.get("chunk_id"))
                 if chunk:
                     refs.append(
                         {
@@ -351,6 +480,7 @@ def generate(recipe, count=1):
                 q = Question(
                     **{
                         **item,
+                        "parent": f"第{item_index // recipe['sub_count'] + 1}問",
                         "id": db.uid(),
                         "category": recipe["category"],
                         "recipe_id": recipe["id"],
@@ -387,6 +517,14 @@ def generate(recipe, count=1):
                 "created_at": db.now(),
                 "prompt_version": PROMPT_VERSION,
                 "generation_status": "complete",
+                "material_ids": list(
+                    dict.fromkeys(c["material_id"] for c in chunks)
+                ),
+                "material_names": list(
+                    dict.fromkeys(c["material_name"] for c in chunks)
+                ),
+                "source_chunk_count": len(chunks),
+                "used_chunk_count": len(used_chunks),
             }
         )
     # Commit the entire generation atomically, including question sets.
@@ -402,14 +540,22 @@ def generate(recipe, count=1):
 
 @app.post("/api/generate")
 def generation(g: Generation):
-    return generate(require("recipes", g.recipe_id), g.count)
+    recipe = require("recipes", g.recipe_id)
+    if g.material_ids is not None:
+        recipe = {**recipe, "material_ids": g.material_ids}
+    return generate(recipe, g.count)
 
 
 @app.post("/api/questions/{id}/regenerate")
 def regenerate(id: str):
     old = require("questions", id)
     r = {**require("recipes", old["recipe_id"]), "major_count": 1, "sub_count": 1}
-    return generate(r)
+    source_chunk_ids = [ref.get("id") for ref in old.get("source_references", [])]
+    material_ids = [
+        ref.get("material_id") for ref in old.get("source_references", [])
+    ]
+    r["material_ids"] = unique_strings(material_ids) or r.get("material_ids", [])
+    return generate(r, source_chunk_ids=unique_strings(source_chunk_ids) or None)
 
 
 def normalize(s):

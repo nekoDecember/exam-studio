@@ -1,9 +1,25 @@
 import shutil
+
+import pytest
+from app.parser import MAX_CHUNK_CHARS, parse, split_chunks
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfWriter
-from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
-import pytest
-from app.parser import parse
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+
+def test_long_text_is_split_on_readable_boundaries():
+    text = ("最初の段落です。" * 900) + "\n\n" + ("次の段落です。" * 900)
+    chunks = split_chunks(
+        [{"id": "original", "text": text, "categories": ["規程"]}]
+    )
+    assert len(chunks) > 1
+    assert all(len(chunk["text"]) <= MAX_CHUNK_CHARS for chunk in chunks)
+    assert all(chunk["source_chunk_id"] == "original" for chunk in chunks)
+    assert [chunk["segment_index"] for chunk in chunks] == list(
+        range(1, len(chunks) + 1)
+    )
+    assert all(chunk["segment_count"] == len(chunks) for chunk in chunks)
+    assert all(chunk["categories"] == ["規程"] for chunk in chunks)
 
 
 def test_text_pdf_location(tmp_path):

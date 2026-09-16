@@ -1095,6 +1095,47 @@ summary {
 .recipe-actions .primary {
   margin-left: auto;
 }
+.source-picker {
+  border: 1px solid #e1e8dc;
+  border-radius: 7px;
+  padding: 15px;
+  margin: 0 0 18px;
+}
+.source-picker legend {
+  padding: 0 6px;
+  color: #63745f;
+  font-size: 11px;
+  font-weight: 550;
+}
+.source-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 0;
+  border-top: 1px solid #edf1e9;
+  cursor: pointer;
+}
+.source-option:first-of-type {
+  margin-top: 10px;
+}
+.source-option input {
+  margin-top: 3px;
+}
+.source-option span,
+.source-option strong,
+.source-option small {
+  display: block;
+}
+.source-option strong {
+  color: #435343;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.source-option small {
+  color: #8b9884;
+  font-size: 10px;
+  margin-top: 3px;
+}
 .batch-field {
   max-width: 210px;
   margin-top: 24px;

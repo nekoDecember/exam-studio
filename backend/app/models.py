@@ -1,5 +1,6 @@
 from typing import Literal
-from pydantic import BaseModel, Field, model_validator
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Question(BaseModel):
@@ -51,11 +52,33 @@ class Recipe(BaseModel):
     difficulty: str = "標準"
     score_weight: float = Field(default=1, gt=0, le=100)
     generation_instruction: str = ""
+    material_ids: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("material_ids")
+    @classmethod
+    def validate_material_ids(cls, value):
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("資料IDは空にできません")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("同じ資料を重複して選択できません")
+        return cleaned
 
 
 class Generation(BaseModel):
     recipe_id: str
     count: int = Field(default=1, ge=1, le=5)
+    material_ids: list[str] | None = Field(default=None, max_length=100)
+
+    @field_validator("material_ids")
+    @classmethod
+    def validate_material_ids(cls, value):
+        if value is None:
+            return value
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned) or len(set(cleaned)) != len(cleaned):
+            raise ValueError("使用資料の指定が不正です")
+        return cleaned
 
 
 class Grade(BaseModel):

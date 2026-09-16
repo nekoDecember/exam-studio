@@ -52,6 +52,7 @@ export type Recipe = {
   difficulty: string;
   score_weight: number;
   generation_instruction: string;
+  material_ids: string[];
 };
 export type Doc = {
   id: string;
@@ -65,6 +66,13 @@ export type Doc = {
   version: number;
   analysis_method: string;
   analysis_provider?: string;
+  chunking?: {
+    max_chars: number;
+    source_chunk_count: number;
+    chunk_count: number;
+    analysis_batch_count: number;
+    auto_split: boolean;
+  };
 };
 export type Data = {
   questions: Question[];

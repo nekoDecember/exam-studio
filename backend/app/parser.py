@@ -2,13 +2,71 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from PIL import Image
-from openpyxl import load_workbook
+
 import pymupdf
 import pytesseract
+from openpyxl import load_workbook
+from PIL import Image
+
 from .db import uid
 
 ALLOWED = {".pdf", ".xlsx", ".png", ".jpg", ".jpeg", ".webp", ".txt"}
+MAX_CHUNK_CHARS = 12_000
+
+
+def split_text(text, max_chars=MAX_CHUNK_CHARS):
+    """Split extracted text on readable boundaries without dropping content."""
+    text = text.strip()
+    if not text:
+        return []
+    parts = []
+    start = 0
+    while start < len(text):
+        hard_end = min(start + max_chars, len(text))
+        end = hard_end
+        if hard_end < len(text):
+            window = text[start:hard_end]
+            minimum = max_chars // 2
+            candidates = [
+                window.rfind("\n\n", minimum),
+                window.rfind("\n", minimum),
+                window.rfind("。", minimum),
+                window.rfind(". ", minimum),
+                window.rfind(" ", minimum),
+            ]
+            boundary = max(candidates)
+            if boundary >= minimum:
+                marker = window[boundary : boundary + 2]
+                end = start + boundary + (2 if marker in ("\n\n", ". ") else 1)
+        piece = text[start:end].strip()
+        if piece:
+            parts.append(piece)
+        start = end
+    return parts
+
+
+def split_chunks(chunks, max_chars=MAX_CHUNK_CHARS):
+    """Bound every extracted chunk while retaining its page/sheet provenance."""
+    result = []
+    for chunk in chunks:
+        original_id = chunk.get("id") or uid()
+        pieces = split_text(str(chunk.get("text", "")), max_chars)
+        if len(pieces) <= 1:
+            if pieces:
+                result.append({**chunk, "id": original_id, "text": pieces[0]})
+            continue
+        for index, piece in enumerate(pieces, start=1):
+            result.append(
+                {
+                    **chunk,
+                    "id": f"{original_id}:segment:{index}",
+                    "text": piece,
+                    "source_chunk_id": original_id,
+                    "segment_index": index,
+                    "segment_count": len(pieces),
+                }
+            )
+    return result
 
 
 def ocr(image):

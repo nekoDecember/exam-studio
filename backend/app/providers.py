@@ -6,11 +6,13 @@ import os
 import re
 from pathlib import Path
 from typing import Protocol
-import httpx
-from .parser import analyze
-from .db import uid
 
-PROMPT_VERSION = "2026-09-12.v1"
+import httpx
+
+from .db import uid
+from .parser import analyze
+
+PROMPT_VERSION = "2026-09-16.v2"
 
 
 class LLMProvider(Protocol):

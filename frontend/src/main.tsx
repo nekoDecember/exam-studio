@@ -336,10 +336,11 @@ function App() {
     };
   }
   function freshRecipe(): Recipe {
+    const initialCategory = categories[0] || "未分類";
     return {
       id: "",
       name: "新しい出題レシピ",
-      category: categories[0] || "未分類",
+      category: initialCategory,
       reference_past_question_id: "",
       question_type: "choice",
       major_count: 1,
@@ -352,6 +353,13 @@ function App() {
       difficulty: "標準",
       score_weight: 1,
       generation_instruction: "",
+      material_ids: data.materials
+        .filter((m) =>
+          m.chunks.some((c) =>
+            (c.categories || m.categories).includes(initialCategory),
+          ),
+        )
+        .map((m) => m.id),
     };
   }
   async function upload(
@@ -1203,6 +1211,7 @@ function App() {
                         <h3>{d.name}</h3>
                         <p>
                           {d.chunks.length} チャンク · バージョン {d.version}
+                          {d.chunking?.auto_split && " · 長文を自動分割済み"}
                         </p>
                         <div>
                           {d.categories.map((c) => (
@@ -1273,6 +1282,17 @@ function App() {
                           {r.difficulty}
                           <br />
                           問題文 約{r.body_length}文字
+                          <br />
+                          使用資料：
+                          {(r.material_ids || []).length
+                            ? (r.material_ids || [])
+                                .map(
+                                  (id) =>
+                                    data.materials.find((m) => m.id === id)
+                                      ?.name || "削除済みの資料",
+                                )
+                                .join("、")
+                            : `「${r.category}」に一致する全資料`}
                         </p>
                         <div className="recipe-actions">
                           <button
@@ -1304,6 +1324,7 @@ function App() {
                                   body: JSON.stringify({
                                     recipe_id: r.id,
                                     count: batch,
+                                    material_ids: r.material_ids || [],
                                   }),
                                 });
                                 await refresh();
@@ -1790,6 +1811,15 @@ function App() {
             <p className="muted">
               解析方式：{documentAnalysisLabel(doc)}{" "}
               · 抽出結果は編集して確定できます。
+              {doc.chunking && (
+                <>
+                  <br />
+                  最大{doc.chunking.max_chars.toLocaleString()}文字単位 ·{" "}
+                  {doc.chunking.analysis_batch_count}処理バッチ
+                  {doc.chunking.auto_split &&
+                    ` · 元の${doc.chunking.source_chunk_count}範囲を${doc.chunking.chunk_count}チャンクへ自動分割`}
+                </>
+              )}
             </p>
             {doc.chunks.map((c, i) => (
               <section className="chunk" key={c.id}>
@@ -1902,6 +1932,49 @@ function App() {
                 ))}
               </datalist>
             </Field>
+            <fieldset className="source-picker">
+              <legend>問題生成に使用する資料</legend>
+              <p className="muted">
+                資料を指定すると、その資料のうち上のカテゴリに一致する範囲だけを根拠にします。未選択の場合はカテゴリに一致する全資料を使用します。
+              </p>
+              {data.materials.length ? (
+                data.materials.map((material) => {
+                  const selected = (recipe.material_ids || []).includes(
+                    material.id,
+                  );
+                  return (
+                    <label className="source-option" key={material.id}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={(e) =>
+                          setRecipe({
+                            ...recipe,
+                            material_ids: e.target.checked
+                              ? [
+                                  ...(recipe.material_ids || []),
+                                  material.id,
+                                ]
+                              : (recipe.material_ids || []).filter(
+                                  (id) => id !== material.id,
+                                ),
+                          })
+                        }
+                      />
+                      <span>
+                        <strong>{material.name}</strong>
+                        <small>
+                          {material.chunks.length}チャンク ·{" "}
+                          {material.categories.join("、") || "未分類"}
+                        </small>
+                      </span>
+                    </label>
+                  );
+                })
+              ) : (
+                <p className="muted">先に試験範囲の資料を登録してください。</p>
+              )}
+            </fieldset>
             <Field label="参考にする過去問の形式">
               <select
                 value={recipe.reference_past_question_id}

@@ -1,9 +1,11 @@
 import io
+
 import pytest
-from fastapi.testclient import TestClient
-from openpyxl import Workbook
 from app import db
 from app.main import app
+from app.parser import MAX_CHUNK_CHARS
+from fastapi.testclient import TestClient
+from openpyxl import Workbook
 
 
 @pytest.fixture
@@ -106,6 +108,160 @@ def test_full_workflow(client):
         .content.decode()
         .startswith("個人情報")
     )
+
+
+def test_long_material_is_split_and_analyzed_in_bounded_batches(client, monkeypatch):
+    calls = []
+
+    def classify(self, chunks):
+        calls.append(sum(len(chunk["text"]) for chunk in chunks))
+        return ["長文規程"]
+
+    monkeypatch.setattr("app.providers.MockProvider.classify_material", classify)
+    long_text = ("業務手順を確認して報告する。\n" * 8_000).encode()
+    r = client.post(
+        "/api/uploads",
+        files={"file": ("long.txt", long_text)},
+        data={"kind": "materials"},
+    )
+    assert r.status_code == 200, r.text
+    material = r.json()
+    assert material["chunking"]["auto_split"] is True
+    assert len(material["chunks"]) > 1
+    assert all(len(c["text"]) <= MAX_CHUNK_CHARS for c in material["chunks"])
+    assert len(calls) == material["chunking"]["analysis_batch_count"] > 1
+    assert max(calls) <= 48_000
+    assert all(c["categories"] == ["長文規程"] for c in material["chunks"])
+
+
+def test_generation_uses_only_selected_materials(client):
+    materials = []
+    for name, content in [
+        ("selected.txt", "選択した資料にだけある正しい記述。"),
+        ("excluded.txt", "選択していない資料にだけある記述。"),
+    ]:
+        material = client.post(
+            "/api/uploads",
+            files={"file": (name, content.encode())},
+            data={"kind": "materials"},
+        ).json()
+        material["categories"] = ["対象"]
+        material["chunks"][0]["categories"] = ["対象"]
+        client.put("/api/documents/materials/" + material["id"], json=material)
+        materials.append(material)
+
+    recipe = client.get("/api/bootstrap").json()["recipes"][0]
+    recipe.update({"category": "対象", "material_ids": [materials[0]["id"]]})
+    assert client.put("/api/recipes/" + recipe["id"], json=recipe).status_code == 200
+
+    result = client.post(
+        "/api/generate", json={"recipe_id": recipe["id"], "count": 1}
+    )
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    assert {
+        ref["material_id"]
+        for question in payload["questions"]
+        for ref in question["source_references"]
+    } == {materials[0]["id"]}
+    assert payload["sets"][0]["material_ids"] == [materials[0]["id"]]
+    assert materials[1]["name"] not in payload["sets"][0]["material_names"]
+
+
+def test_generation_splits_long_source_across_provider_calls(client, monkeypatch):
+    material = client.post(
+        "/api/uploads",
+        files={
+            "file": (
+                "long.txt",
+                ("長い資料の根拠文です。\n" * 15_000).encode(),
+            )
+        },
+        data={"kind": "materials"},
+    ).json()
+    material["categories"] = ["対象"]
+    for chunk in material["chunks"]:
+        chunk["categories"] = ["対象"]
+    client.put("/api/documents/materials/" + material["id"], json=material)
+    recipe = client.get("/api/bootstrap").json()["recipes"][0]
+    recipe.update(
+        {
+            "category": "対象",
+            "material_ids": [material["id"]],
+            "major_count": 1,
+            "sub_count": 3,
+        }
+    )
+    client.put("/api/recipes/" + recipe["id"], json=recipe)
+
+    original = __import__(
+        "app.providers", fromlist=["MockProvider"]
+    ).MockProvider.generate_question_set
+    call_sizes = []
+
+    def generate(self, call_recipe, chunks, style):
+        call_sizes.append(sum(len(chunk["text"]) for chunk in chunks))
+        return original(self, call_recipe, chunks, style)
+
+    monkeypatch.setattr("app.providers.MockProvider.generate_question_set", generate)
+    result = client.post("/api/generate", json={"recipe_id": recipe["id"]})
+    assert result.status_code == 200, result.text
+    assert len(call_sizes) > 1
+    assert max(call_sizes) <= 60_000
+    assert len(result.json()["questions"]) == 3
+
+
+def test_generation_also_splits_legacy_unbounded_chunks(client, monkeypatch):
+    material = db.put(
+        "materials",
+        {
+            "name": "legacy.txt",
+            "categories": ["対象"],
+            "chunks": [
+                {
+                    "id": "legacy-chunk",
+                    "text": "旧データの長文。" * 20_000,
+                    "categories": ["対象"],
+                }
+            ],
+            "questions": [],
+        },
+    )
+    recipe = client.get("/api/bootstrap").json()["recipes"][0]
+    recipe.update(
+        {
+            "category": "対象",
+            "material_ids": [material["id"]],
+            "major_count": 1,
+            "sub_count": 3,
+        }
+    )
+    client.put("/api/recipes/" + recipe["id"], json=recipe)
+    sizes = []
+    original = __import__(
+        "app.providers", fromlist=["MockProvider"]
+    ).MockProvider.generate_question_set
+
+    def generate(self, call_recipe, chunks, style):
+        sizes.append(max(len(c["text"]) for c in chunks))
+        return original(self, call_recipe, chunks, style)
+
+    monkeypatch.setattr("app.providers.MockProvider.generate_question_set", generate)
+    response = client.post("/api/generate", json={"recipe_id": recipe["id"]})
+    assert response.status_code == 200, response.text
+    assert sizes and max(sizes) <= MAX_CHUNK_CHARS
+    assert response.json()["questions"][0]["source_references"][0][
+        "id"
+    ].startswith("legacy-chunk:segment:")
+
+
+def test_generation_rejects_missing_selected_material(client):
+    recipe = client.get("/api/bootstrap").json()["recipes"][0]
+    recipe["material_ids"] = ["missing-material"]
+    client.put("/api/recipes/" + recipe["id"], json=recipe)
+    response = client.post("/api/generate", json={"recipe_id": recipe["id"]})
+    assert response.status_code == 422
+    assert "見つかりません" in response.json()["detail"]
 
 
 def test_multimodal_upload_uses_selected_method(client, monkeypatch):
