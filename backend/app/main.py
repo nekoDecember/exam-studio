@@ -800,13 +800,9 @@ def select_source_units(source_batches, questions, question_count, offset):
     reused = _interleave_source_batches(previously_used, offset)
 
     if fresh:
-        start = offset % len(fresh)
-        candidates = fresh[start:] + fresh[:start] + reused
+        candidates = fresh + reused
     else:
         candidates = _interleave_source_batches(all_batches, offset)
-        if candidates:
-            start = offset % len(candidates)
-            candidates = candidates[start:] + candidates[:start]
     if not candidates:
         raise HTTPException(409, "問題の根拠にできる資料本文がありません")
     return [candidates[index % len(candidates)] for index in range(question_count)]
@@ -917,7 +913,11 @@ def regenerate_question_candidate(
         "ng_feedback": unique_strings(feedback),
     }
     source_for_model = [
-        {"source_key": "SOURCE_1", "text": str(source_unit.get("text") or "")}
+        {
+            "id": "SOURCE_1",
+            "source_key": "SOURCE_1",
+            "text": str(source_unit.get("text") or ""),
+        }
     ]
     replacement = ai_call(
         provider().generate_question_set, call_recipe, source_for_model
@@ -1017,12 +1017,24 @@ def _generate(
     chunks = generation_sources(recipe, source_chunk_ids)
     source_batches = chunk_batches(chunks, MAX_GENERATION_BATCH_CHARS)
     existing_questions = db.all_items("questions")
+    material_ids = {str(chunk.get("material_id") or "") for chunk in chunks}
+    source_history = [
+        {"source_references": locations}
+        for generation_set in db.all_items("sets")
+        if material_ids & {
+            str(material_id) for material_id in generation_set.get("material_ids", [])
+        }
+        and isinstance(
+            locations := generation_set.get("used_source_locations"), list
+        )
+        and locations
+    ]
     pending = []
     sets = []
     for n in range(count):
         set_id = db.uid()
         question_count = recipe["major_count"] * recipe["sub_count"]
-        known_questions = [*existing_questions, *pending]
+        known_questions = [*existing_questions, *source_history, *pending]
         selected_units = select_source_units(
             source_batches,
             known_questions,
@@ -1034,7 +1046,11 @@ def _generate(
         for source_unit in selected_units:
             known_questions = [*existing_questions, *pending]
             source_for_model = [
-                {"source_key": "SOURCE_1", "text": str(source_unit.get("text") or "")}
+                {
+                    "id": "SOURCE_1",
+                    "source_key": "SOURCE_1",
+                    "text": str(source_unit.get("text") or ""),
+                }
             ]
             call_recipe = {
                 **recipe,
@@ -1265,6 +1281,26 @@ def _generate(
                 ),
                 "source_chunk_count": len(chunks),
                 "used_chunk_count": len(used_chunks),
+                "used_source_locations": [
+                    {
+                        key: source_unit[key]
+                        for key in (
+                            "id",
+                            "material_id",
+                            "material_name",
+                            "page_number",
+                            "line_start",
+                            "line_end",
+                            "char_start",
+                            "char_end",
+                            "slide_number",
+                            "sheet_name",
+                            "cell_range",
+                        )
+                        if key in source_unit
+                    }
+                    for source_unit in used_chunks.values()
+                ],
             }
         )
     # Commit the entire generation atomically, including question sets.

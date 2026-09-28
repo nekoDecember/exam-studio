@@ -21,6 +21,27 @@ from .question_quality import (
 PROMPT_VERSION = "2026-09-28.v1"
 
 
+_JAPANESE_PARTICLES = re.compile(
+    r"(?:に沿って|に基づき|に対して|について|によって|として|には|では|から|まで|が|を|は|へ|に|で|と|の|も|や)"
+)
+
+
+def mock_answer_phrases(sentence):
+    """Find several source-grounded spans for the offline cloze generator."""
+    phrases = []
+    for match in re.finditer(r"[ぁ-ゖ一-龯々ァ-ヶーA-Za-z0-9]{2,}", sentence):
+        token = match.group(0)
+        phrases.extend(_JAPANESE_PARTICLES.split(token))
+        phrases.append(token)
+    return list(
+        dict.fromkeys(
+            phrase.strip()
+            for phrase in phrases
+            if len(phrase.strip()) >= 2
+        )
+    )
+
+
 class LLMProvider(Protocol):
     def extract_pdf(self, path): ...
     def classify_material(self, chunks): ...
@@ -65,22 +86,22 @@ class MockProvider:
             candidates = []
             for passage_offset in range(len(passages)):
                 chunk, sentence = passages[(index + passage_offset) % len(passages)]
-                phrases = list(dict.fromkeys(
-                    match.group(0)
-                    for match in re.finditer(r"[一-龯々ァ-ヶA-Za-z0-9]{2,}", sentence)
-                )) or [sentence[: min(8, len(sentence))]]
+                phrases = mock_answer_phrases(sentence) or [
+                    sentence[: min(8, len(sentence))]
+                ]
                 phrase_start = index % len(phrases)
                 phrases = phrases[phrase_start:] + phrases[:phrase_start]
-                for phrase in (phrases if kind in ("blank", "word") else phrases[:1]):
+                for phrase in phrases:
+                    cloze_body = sentence.replace(phrase, "（　）", 1)
                     prompt = (
-                        "資料に記載されている内容を選んでください。"
+                        cloze_body + "　空欄に入る語句を選んでください。"
                         if kind == "choice"
-                        else sentence.replace(phrase, "（　）", 1) + "　空欄に入る語句を答えてください。"
+                        else cloze_body + "　空欄に入る語句を答えてください。"
                         if kind in ("blank", "word")
                         else "資料が求めている対応や条件を、内容が分かるように説明してください。"
                     )
                     choices = (
-                        [sentence]
+                        [phrase]
                         + [
                             f"資料には記載のない説明（{choice_index}）"
                             for choice_index in range(1, recipe["choice_count"])
@@ -88,7 +109,7 @@ class MockProvider:
                         if kind == "choice"
                         else []
                     )
-                    answer = sentence if kind in ("choice", "short") else phrase
+                    answer = sentence if kind == "short" else phrase
                     candidate = {
                         "body": prompt,
                         "question_type": kind,

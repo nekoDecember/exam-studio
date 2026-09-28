@@ -239,7 +239,7 @@ def test_generation_also_splits_legacy_unbounded_chunks(client, monkeypatch):
             "chunks": [
                 {
                     "id": "legacy-chunk",
-                    "text": "旧データの長文。" * 20_000,
+                    "text": "従業員は事故発生時に上長へ報告し、記録を保存する。\n" * 20_000,
                     "categories": ["対象"],
                 }
             ],
@@ -483,10 +483,10 @@ def test_repeated_generation_covers_all_source_batches_in_question_count(client)
                 "difficulty": "基礎",
             })
             assert changed_conditions.status_code == 200, changed_conditions.text
-            assert (
-                changed_conditions.json()["questions"][0]["source_references"][0]["id"]
-                == payload["questions"][0]["source_references"][0]["id"]
-            )
+            changed_source_id = changed_conditions.json()["questions"][0][
+                "source_references"
+            ][0]["id"]
+            assert changed_source_id not in references
             for question in payload["questions"]:
                 db.delete("questions", question["id"])
 
