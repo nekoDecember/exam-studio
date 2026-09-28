@@ -1,10 +1,13 @@
 import shutil
+import zipfile
 
+import pymupdf
 import pytest
-from app.parser import MAX_CHUNK_CHARS, parse, split_chunks
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+from app.parser import MAX_CHUNK_CHARS, parse, split_chunks
 
 
 def test_long_text_is_split_on_readable_boundaries():
@@ -49,6 +52,32 @@ def test_text_pdf_location(tmp_path):
     chunks = parse(path)
     assert chunks[0]["page_number"] == 1
     assert "Information security" in chunks[0]["text"]
+
+
+def test_powerpoint_and_html_extract_readable_sections(tmp_path):
+    slides = tmp_path / "training.pptx"
+    with zipfile.ZipFile(slides, "w") as package:
+        package.writestr("ppt/slides/slide2.xml", '<p:sld xmlns:p="p" xmlns:a="a"><a:t>第二章</a:t><a:t>承認を得る</a:t></p:sld>')
+        package.writestr("ppt/slides/slide1.xml", '<p:sld xmlns:p="p" xmlns:a="a"><a:t>第一章</a:t><a:t>情報を守る</a:t></p:sld>')
+    chunks = parse(slides)
+    assert [chunk["slide_number"] for chunk in chunks] == [1, 2]
+    assert "情報を守る" in chunks[0]["text"]
+    page = tmp_path / "guide.html"
+    page.write_text("<html><script>secret()</script><nav>メニュー</nav><article><h1>昇格試験</h1><p>情報管理を学ぶ。</p></article></html>", encoding="utf-8")
+    text = parse(page)[0]["text"]
+    assert "情報管理を学ぶ" in text and "メニュー" not in text and "secret" not in text
+
+
+def test_pdf_over_old_page_limit_is_split_by_page(tmp_path):
+    path = tmp_path / "large.pdf"
+    with pymupdf.open() as pdf:
+        for number in range(101):
+            page = pdf.new_page()
+            page.insert_text((40, 80), f"Policy page {number + 1}: report incidents immediately.")
+        pdf.save(path)
+    chunks = parse(path)
+    assert len(chunks) == 101
+    assert chunks[-1]["page_number"] == 101
 
 
 @pytest.mark.skipif(

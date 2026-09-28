@@ -1,6 +1,9 @@
 export type Question = {
   id: string;
   body: string;
+  tested_concept?: string;
+  answer_target?: string;
+  question_goal?: string;
   category: string;
   question_type: "choice" | "blank" | "word" | "short";
   choices: string[];
@@ -40,7 +43,6 @@ export type Recipe = {
   id: string;
   name: string;
   category: string;
-  reference_past_question_id: string;
   question_type: Question["question_type"];
   major_count: number;
   sub_count: number;
@@ -57,31 +59,43 @@ export type Recipe = {
 export type Doc = {
   id: string;
   name: string;
-  year: string;
+  file_type?: string;
   categories: string[];
   chunks: Record<string, any>[];
-  questions: Record<string, any>[];
   warnings: string[];
   status: string;
   version: number;
   analysis_method: string;
   analysis_provider?: string;
+  source_url?: string;
   chunking?: {
     max_chars: number;
     source_chunk_count: number;
     chunk_count: number;
     analysis_batch_count: number;
+    generation_batch_count?: number;
+    generation_location_count?: number;
     auto_split: boolean;
   };
 };
 export type Data = {
   questions: Question[];
   materials: Doc[];
-  exams: Doc[];
   recipes: Recipe[];
   categories: { id: string; name: string }[];
   sets: { id: string; name: string }[];
   provider: string;
+};
+export type GenerationJob = {
+  id: string;
+  kind: "direct" | "recipe";
+  status: "queued" | "running" | "complete" | "failed";
+  total: number;
+  completed: number;
+  set_ids: string[];
+  error?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 export const typeNames = {
   choice: "選択問題",

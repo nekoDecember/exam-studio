@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class Question(BaseModel):
     id: str = ""
     body: str = Field(min_length=1, max_length=12000)
+    tested_concept: str = Field(default="", max_length=300)
+    answer_target: str = Field(default="", max_length=300)
+    question_goal: str = Field(default="", max_length=40)
     category: str = "未分類"
     question_type: Literal["choice", "blank", "word", "short"] = "choice"
     choices: list[str] = []
@@ -14,7 +17,7 @@ class Question(BaseModel):
     explanation: str = ""
     source_references: list[dict] = []
     warnings: list[str] = []
-    status: Literal["active", "deleted"] = "active"
+    status: Literal["active"] = "active"
     favorite: bool = False
     note: str = ""
     recipe_id: str = ""
@@ -40,10 +43,9 @@ class Recipe(BaseModel):
     id: str = ""
     name: str = Field(min_length=1)
     category: str
-    reference_past_question_id: str = ""
     question_type: Literal["choice", "blank", "word", "short"] = "choice"
     major_count: int = Field(default=1, ge=1, le=5)
-    sub_count: int = Field(default=3, ge=1, le=10)
+    sub_count: int = Field(default=3, ge=1, le=20)
     body_length: int = Field(default=150, ge=20, le=2000)
     choice_count: int = Field(default=4, ge=2, le=8)
     blank_count: int = Field(default=1, ge=1, le=8)
@@ -52,7 +54,8 @@ class Recipe(BaseModel):
     difficulty: str = "標準"
     score_weight: float = Field(default=1, gt=0, le=100)
     generation_instruction: str = ""
-    material_ids: list[str] = Field(default_factory=list, max_length=100)
+    material_ids: list[str] = Field(default_factory=list, max_length=1000)
+    all_categories: bool = False
 
     @field_validator("material_ids")
     @classmethod
@@ -68,7 +71,7 @@ class Recipe(BaseModel):
 class Generation(BaseModel):
     recipe_id: str
     count: int = Field(default=1, ge=1, le=5)
-    material_ids: list[str] | None = Field(default=None, max_length=100)
+    material_ids: list[str] | None = Field(default=None, max_length=1000)
 
     @field_validator("material_ids")
     @classmethod

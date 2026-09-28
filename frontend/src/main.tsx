@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Library,
   Files,
-  ScrollText,
   SlidersHorizontal,
   ChartNoAxesCombined,
   ArrowRight,
@@ -35,12 +34,14 @@ import {
   loadData,
   loadActive,
   listAttempts,
+  keepKnownQuestions,
+  purgeMissingQuestions,
   saveAttempt,
   syncAttempts,
   newAttempt,
   gradeLocal,
 } from "./store";
-import type { Data, Question, Attempt, Recipe, Doc } from "./types";
+import type { Data, Question, Attempt, Recipe, Doc, GenerationJob } from "./types";
 import { typeNames } from "./types";
 import "./style.css";
 
@@ -49,14 +50,20 @@ type Page =
   | "practice"
   | "bank"
   | "materials"
-  | "exams"
   | "recipes"
   | "analytics";
 type AnalysisMethod = "standard" | "multimodal";
+type ImportItem = {
+  id: string;
+  name: string;
+  file?: File;
+  url?: string;
+  status: "waiting" | "reading" | "done" | "error";
+  error?: string;
+};
 const empty: Data = {
   questions: [],
   materials: [],
-  exams: [],
   recipes: [],
   categories: [],
   sets: [],
@@ -67,8 +74,6 @@ const nav: [Page, string, typeof BookOpen][] = [
   ["practice", "演習する", BookOpen],
   ["bank", "問題バンク", Library],
   ["materials", "試験範囲の資料", Files],
-  ["exams", "過去問・出題形式", ScrollText],
-  ["recipes", "出題レシピ", SlidersHorizontal],
   ["analytics", "学習の記録", ChartNoAxesCombined],
 ];
 function documentAnalysisLabel(doc: Doc) {
@@ -77,6 +82,13 @@ function documentAnalysisLabel(doc: Doc) {
   if (doc.analysis_provider === "openai" || doc.analysis_method === "openai")
     return "標準抽出（PyMuPDF） + AI解析";
   return "標準抽出（PyMuPDF + ローカルOCR）";
+}
+function sourceLineLabel(fileType?: string, lineBasis?: string, ocr?: number) {
+  return lineBasis === "extracted" ||
+    [".html", ".htm", ".ppt", ".pptx", ".png", ".jpg", ".jpeg", ".webp"].includes(fileType || "") ||
+    ocr !== undefined
+    ? "抽出行"
+    : "行";
 }
 function App() {
   const [page, setPage] = useState<Page>("home"),
@@ -92,13 +104,21 @@ function App() {
     [typ, setTyp] = useState("すべて"),
     [filter, setFilter] = useState("active"),
     [setFilterId, setSetFilterId] = useState("すべて"),
+    [focusQuestionSetIds, setFocusQuestionSetIds] = useState<string[] | null>(null),
     [majorFilter, setMajorFilter] = useState("すべて"),
     [editor, setEditor] = useState<Question | null>(null),
     [doc, setDoc] = useState<Doc | null>(null),
     [recipe, setRecipe] = useState<Recipe | null>(null),
     [batch, setBatch] = useState(1),
     [analysisMethod, setAnalysisMethod] =
-      useState<AnalysisMethod>("standard");
+      useState<AnalysisMethod>("standard"),
+    [urlInput, setUrlInput] = useState(""),
+    [imports, setImports] = useState<ImportItem[]>([]),
+    [selectedMaterialIds, setSelectedMaterialIds] = useState<string[] | null>(null),
+    [quickType, setQuickType] = useState<Question["question_type"]>("choice"),
+    [quickCount, setQuickCount] = useState(5),
+    [generationJob, setGenerationJob] = useState<GenerationJob>(),
+    [quickDifficulty, setQuickDifficulty] = useState("標準");
   const current = useRef<Attempt | undefined>(undefined),
     writeQueue = useRef(Promise.resolve()),
     generation = useRef(0),
@@ -116,8 +136,30 @@ function App() {
   };
   async function refresh() {
     const d = await api("/bootstrap");
+    const questionIds = new Set<string>(
+      d.questions.map((question: Question) => question.id),
+    );
+    const local = await purgeMissingQuestions(
+      questionIds,
+    );
+    const activeAttempt = current.current
+      ? keepKnownQuestions(current.current, questionIds)
+      : local.active;
+    if (current.current && activeAttempt && activeAttempt !== current.current)
+      await saveAttempt(activeAttempt);
+    const attempts = new Map(local.attempts.map((item) => [item.id, item]));
+    if (
+      activeAttempt &&
+      (!attempts.has(activeAttempt.id) ||
+        (attempts.get(activeAttempt.id)?.revision || 0) < activeAttempt.revision)
+    )
+      attempts.set(activeAttempt.id, activeAttempt);
     setData(d);
     await cacheData(d);
+    setHistory([...attempts.values()]);
+    current.current = activeAttempt;
+    setAttempt(activeAttempt);
+    if (!activeAttempt && page === "practice") setPage("home");
   }
   useEffect(() => {
     let live = true;
@@ -144,6 +186,16 @@ function App() {
         } catch {
           if (live) setStatus("オフライン・端末に保存");
         }
+        try {
+          const jobs: GenerationJob[] = await api("/generation-jobs");
+          if (live && jobs.length) {
+            setGenerationJob(
+              jobs.find((job) => job.status === "queued" || job.status === "running") || jobs[0],
+            );
+          }
+        } catch {
+          // Existing offline data remains usable when the generation API is unavailable.
+        }
       } catch {
         if (live)
           setError(
@@ -153,18 +205,74 @@ function App() {
         if (live) setReady(true);
       }
     })();
-    const sync = () =>
-      syncAttempts()
-        .then(() => setStatus("同期済み"))
-        .catch(() => setStatus("オフライン・端末に保存"));
+    const sync = async () => {
+      try {
+        if (await syncAttempts()) await refresh();
+        setStatus("同期済み");
+      } catch {
+        setStatus("オフライン・端末に保存");
+      }
+    };
+    const resumeGeneration = async () => {
+      try {
+        const jobs: GenerationJob[] = await api("/generation-jobs");
+        if (live && jobs.length) {
+          setGenerationJob(
+            jobs.find((job) => job.status === "queued" || job.status === "running") || jobs[0],
+          );
+        }
+        await refresh();
+      } catch {
+        // Keep using cached study data until the API is reachable again.
+      }
+    };
     window.addEventListener("online", sync);
+    window.addEventListener("online", resumeGeneration);
     const interval = setInterval(sync, 15000);
     return () => {
       live = false;
       clearInterval(interval);
       window.removeEventListener("online", sync);
+      window.removeEventListener("online", resumeGeneration);
     };
   }, []);
+  useEffect(() => {
+    if (!generationJob || !["queued", "running"].includes(generationJob.status))
+      return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const latest: GenerationJob = await api(`/generation-jobs/${generationJob.id}`);
+        if (!live) return;
+        if (latest.status === "complete" || latest.status === "failed") {
+          try {
+            await refresh();
+          } catch {
+            setError(
+              latest.status === "complete"
+                ? "生成は完了しましたが、問題一覧を更新できませんでした。再読み込みしてください。"
+                : "生成は中断されました。保存済みの問題一覧を更新できませんでした。再読み込みしてください。",
+            );
+          }
+          if (live) setGenerationJob(latest);
+          return;
+        }
+        setGenerationJob(latest);
+        timer = setTimeout(poll, 1200);
+      } catch {
+        if (live) timer = setTimeout(poll, 3000);
+      }
+    };
+    poll();
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [generationJob?.id, generationJob?.status]);
+  useEffect(() => {
+    if (page === "practice" && !attempt?.questions.length) setPage("home");
+  }, [page, attempt?.questions.length]);
   function persist(next: Attempt) {
     current.current = next;
     setAttempt(next);
@@ -179,7 +287,8 @@ function App() {
         syncTimer.current = setTimeout(
           () =>
             syncAttempts()
-              .then(() => {
+              .then(async (sanitized) => {
+                if (sanitized) await refresh();
                 if (version === generation.current) setStatus("同期済み");
               })
               .catch(() => {
@@ -242,6 +351,7 @@ function App() {
     setTyp("すべて");
     setFilter("active");
     setSetFilterId("すべて");
+    setFocusQuestionSetIds(null);
     setMajorFilter("すべて");
   }
   const categories = [
@@ -253,11 +363,15 @@ function App() {
       ),
     ]),
   ];
+  const questionMatchesSetFilter = (question: Question) =>
+    setFilterId === "job"
+      ? !!focusQuestionSetIds?.includes(question.question_set_id)
+      : setFilterId === "すべて" || question.question_set_id === setFilterId;
   const filtered = data.questions.filter(
     (q) =>
-      (setFilterId === "すべて" || q.question_set_id === setFilterId) &&
+      questionMatchesSetFilter(q) &&
       (majorFilter === "すべて" || q.parent === majorFilter) &&
-      (filter === "deleted" ? q.status === "deleted" : q.status === "active") &&
+      q.status !== "deleted" &&
       (cat === "すべて" || q.category === cat) &&
       (typ === "すべて" || q.question_type === typ) &&
       (filter !== "favorite" || q.favorite) &&
@@ -306,11 +420,47 @@ function App() {
       patch({ results: { ...current.current.results, [q.id]: r } });
   }
   async function saveQ(value: Question) {
-    await api("/questions" + (value.id ? "/" + value.id : ""), {
+    const saved: Question = await api("/questions" + (value.id ? "/" + value.id : ""), {
       method: value.id ? "PUT" : "POST",
       body: JSON.stringify(value),
     });
+    const session = current.current;
+    const oldSnapshot = session?.questions.find((question) => question.id === saved.id);
+    if (session && oldSnapshot) {
+      const gradingFields: (keyof Question)[] = [
+        "body",
+        "question_type",
+        "choices",
+        "answer",
+        "accepted_answers",
+        "explanation",
+        "grading_rubric",
+      ];
+      const answerChanged = gradingFields.some(
+        (field) => JSON.stringify(oldSnapshot[field]) !== JSON.stringify(saved[field]),
+      );
+      const answers = { ...session.answers };
+      const results = { ...session.results };
+      if (answerChanged) {
+        delete answers[saved.id];
+        delete results[saved.id];
+      }
+      persist({
+        ...session,
+        questions: session.questions.map((question) =>
+          question.id === saved.id ? saved : question,
+        ),
+        answers,
+        results,
+        revision: session.revision + 1,
+        updated_at: new Date().toISOString(),
+      });
+    }
     setEditor(null);
+    await refresh();
+  }
+  async function deleteQuestion(id: string) {
+    await api(`/questions/${id}`, { method: "DELETE" });
     await refresh();
   }
   function freshQ(): Question {
@@ -341,7 +491,6 @@ function App() {
       id: "",
       name: "新しい出題レシピ",
       category: initialCategory,
-      reference_past_question_id: "",
       question_type: "choice",
       major_count: 1,
       sub_count: 3,
@@ -362,20 +511,73 @@ function App() {
         .map((m) => m.id),
     };
   }
-  async function upload(
-    file: File,
-    kind: string,
-    selectedAnalysisMethod: AnalysisMethod,
-  ) {
-    const f = new FormData();
-    f.append("file", file);
-    f.append("kind", kind);
-    f.append("analysis_method", selectedAnalysisMethod);
-    const d = await api("/uploads", { method: "POST", body: f });
-    await refresh();
-    setDoc(d);
+  async function runImports(items: ImportItem[]) {
+    setImports((current) => [...current.filter((entry) => !items.some((item) => item.id === entry.id)), ...items]);
+    for (const item of items) {
+      setImports((current) => current.map((entry) =>
+        entry.id === item.id ? { ...entry, status: "reading", error: "" } : entry,
+      ));
+      try {
+        if (item.file) {
+          const body = new FormData();
+          body.append("file", item.file);
+          body.append("analysis_method", item.file.name.toLowerCase().endsWith(".pdf") ? analysisMethod : "standard");
+          await api("/uploads", { method: "POST", body }, 600000);
+        } else {
+          await api("/urls", {
+            method: "POST",
+            body: JSON.stringify({ url: item.url }),
+          }, 600000);
+        }
+        setImports((current) => current.map((entry) =>
+          entry.id === item.id ? { ...entry, status: "done" } : entry,
+        ));
+        try {
+          await refresh();
+        } catch {
+          setError("資料は保存されましたが一覧を更新できませんでした。画面を再読み込みしてください。");
+        }
+      } catch (cause) {
+        setImports((current) => current.map((entry) =>
+          entry.id === item.id
+            ? { ...entry, status: "error", error: cause instanceof Error ? cause.message : "読み込めませんでした" }
+            : entry,
+        ));
+      }
+    }
   }
+  function fileItems(files: FileList | File[]) {
+    return Array.from(files).map((file) => ({
+      id: crypto.randomUUID(), name: file.name, file, status: "waiting" as const,
+    }));
+  }
+  async function quickGenerate() {
+    const material_ids = selectedMaterialIds ?? data.materials.map((item) => item.id);
+    if (!material_ids.length) throw new Error("問題に使う資料を選んでください");
+    if (!Number.isInteger(quickCount) || quickCount < 1 || quickCount > 1000)
+      throw new Error("問数は1〜1,000の範囲で指定してください");
+    const job: GenerationJob = await api("/generation-jobs/direct", {
+      method: "POST",
+      body: JSON.stringify({
+        material_ids,
+        question_type: quickType,
+        question_count: quickCount,
+        difficulty: quickDifficulty,
+      }),
+    });
+    setGenerationJob(job);
+  }
+  const generationRunning =
+    generationJob?.status === "queued" || generationJob?.status === "running";
   const pageTitle = nav.find((n) => n[0] === page)![1];
+  const selectedSourceLocationCount = data.materials
+    .filter((material) =>
+      selectedMaterialIds === null || selectedMaterialIds.includes(material.id),
+    )
+    .reduce(
+      (sum, material) => sum + (material.chunking?.generation_location_count || 0),
+      0,
+    );
   return (
     <div className="app">
       <aside className="sidebar">
@@ -458,6 +660,64 @@ function App() {
                 <X size={16} />
               </button>
             </div>
+          )}
+          {generationJob && (
+            <section className="panel generation-job" aria-live="polite">
+              <div className="generation-job-copy">
+                <span className={"import-status " + generationJob.status}>
+                  {generationJob.status === "queued"
+                    ? "待機中"
+                    : generationJob.status === "running"
+                      ? "生成中"
+                      : generationJob.status === "complete"
+                        ? "完了"
+                        : "中断・失敗"}
+                </span>
+                <h3>
+                  {generationJob.status === "complete"
+                    ? "問題の生成が完了しました"
+                    : generationJob.status === "failed"
+                      ? "問題生成を完了できませんでした"
+                      : "問題を生成しています"}
+                </h3>
+                <p>
+                  {generationJob.completed} / {generationJob.total}{" "}
+                  {generationJob.kind === "direct" ? "問" : "セット"}
+                  {generationJob.error && <><br />{generationJob.error}</>}
+                  {generationRunning && <><br />画面を移動しても生成は続きます。完了後にここから問題確認・演習へ進めます。</>}
+                </p>
+                {generationRunning && (
+                  <div className="progress-track">
+                    <i style={{ width: `${Math.round((generationJob.completed / Math.max(1, generationJob.total)) * 100)}%` }} />
+                  </div>
+                )}
+              </div>
+              {!!generationJob.set_ids.length && (
+                <div className="generation-job-actions">
+                  <button
+                    className="button"
+                    onClick={() => {
+                      go("bank");
+                      setFocusQuestionSetIds(generationJob.set_ids);
+                      setSetFilterId(generationJob.set_ids.length === 1 ? generationJob.set_ids[0] : "job");
+                    }}
+                  >
+                    問題を確認
+                  </button>
+                  {data.questions.some((question) => generationJob.set_ids.includes(question.question_set_id)) && (
+                    <button
+                      className="button primary"
+                      onClick={() => start(
+                        data.questions.filter((question) => generationJob.set_ids.includes(question.question_set_id)),
+                        "生成した問題の演習",
+                      )}
+                    >
+                      生成した問題を演習
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
           )}
           {!ready ? (
             <div className="empty">学習データを読み込んでいます…</div>
@@ -600,14 +860,14 @@ function App() {
                       </button>
                       <button
                         className="action-row"
-                        onClick={() => go("recipes")}
+                        onClick={() => go("materials")}
                       >
                         <span className="action-icon lavender">
                           <Sparkles />
                         </span>
                         <div>
                           <strong>資料から問題をつくる</strong>
-                          <p>今年の試験範囲と過去問の形式を組み合わせる</p>
+                          <p>資料を追加し、形式を選んで問題を作る</p>
                         </div>
                         <ArrowRight size={19} />
                       </button>
@@ -794,19 +1054,41 @@ function App() {
                                 <summary>
                                   根拠：{s.material_name}{" "}
                                   {s.page_number ? `p.${s.page_number}` : ""}{" "}
+                                  {s.line_start ? `${sourceLineLabel(s.file_type, s.line_basis, s.ocr_confidence)} ${s.line_start}${s.line_end && s.line_end !== s.line_start ? `–${s.line_end}` : ""}` : ""}{" "}
+                                  {s.char_start ? `文字 ${s.char_start}–${s.char_end}` : ""}{" "}
+                                  {s.slide_number ? `スライド ${s.slide_number}` : ""}{" "}
                                   {s.sheet_name} {s.cell_range}
                                 </summary>
                                 <p className="pre-wrap">{s.text}</p>
-                                <a
-                                  href={`/api/documents/materials/${s.material_id}/file`}
-                                >
-                                  元の資料をダウンロード
-                                </a>
+                                {data.materials.some(
+                                  (material) => material.id === s.material_id,
+                                ) ? (
+                                  <a
+                                    href={`/api/documents/materials/${s.material_id}/file`}
+                                  >
+                                    元の資料をダウンロード
+                                  </a>
+                                ) : s.source_url ? (
+                                  <a href={s.source_url} target="_blank" rel="noreferrer">
+                                    登録元URLを開く
+                                  </a>
+                                ) : (
+                                  <span className="muted">元資料は削除済みです</span>
+                                )}
                               </details>
                             ))}
                           </div>
                         )}
                         <div className="question-tools">
+                          <button
+                            className="text-button"
+                            onClick={() => {
+                              const bankQuestion = data.questions.find((item) => item.id === q.id);
+                              setEditor(structuredClone(bankQuestion || q));
+                            }}
+                          >
+                            問題を確認・編集
+                          </button>
                           <button
                             className={
                               "text-button " +
@@ -1000,11 +1282,16 @@ function App() {
                         aria-label="問題セット"
                         value={setFilterId}
                         onChange={(e) => {
+                          if (e.target.value === "job") return;
+                          setFocusQuestionSetIds(null);
                           setSetFilterId(e.target.value);
                           setMajorFilter("すべて");
                         }}
                       >
                         <option value="すべて">すべてのセット</option>
+                        {setFilterId === "job" && focusQuestionSetIds && (
+                          <option value="job">今回生成した問題</option>
+                        )}
                         <option value="sample">サンプル問題</option>
                         {data.sets.map((s) => (
                           <option key={s.id} value={s.id}>
@@ -1021,11 +1308,7 @@ function App() {
                         {[
                           ...new Set(
                             data.questions
-                              .filter(
-                                (q) =>
-                                  setFilterId === "すべて" ||
-                                  q.question_set_id === setFilterId,
-                              )
+                              .filter(questionMatchesSetFilter)
                               .map((q) => q.parent),
                           ),
                         ].map((p) => (
@@ -1038,7 +1321,6 @@ function App() {
                         ["active", "すべて"],
                         ["favorite", "お気に入り"],
                         ["wrong", "間違えた問題"],
-                        ["deleted", "削除済み"],
                       ].map(([k, v]) => (
                         <button
                           className={filter === k ? "active" : ""}
@@ -1051,14 +1333,12 @@ function App() {
                     </div>
                     <div className="list-caption">
                       <span>{filtered.length} 問の問題</span>
-                      {filter !== "deleted" && (
-                        <button
-                          className="text-button"
-                          onClick={() => start(filtered, "選択した条件で演習")}
-                        >
-                          この条件で演習 <Play size={14} />
-                        </button>
-                      )}
+                      <button
+                        className="text-button"
+                        onClick={() => start(filtered, "選択した条件で演習")}
+                      >
+                        この条件で演習 <Play size={14} />
+                      </button>
                     </div>
                     {!filtered.length ? (
                       <div className="empty">条件に合う問題がありません。</div>
@@ -1085,6 +1365,14 @@ function App() {
                           </button>
                           <button
                             className="icon-button"
+                            aria-label="この問題を演習"
+                            title="この問題を演習"
+                            onClick={() => start([structuredClone(x)], "問題バンクからの演習")}
+                          >
+                            <Play size={17} />
+                          </button>
+                          <button
+                            className="icon-button"
                             aria-label="お気に入り切り替え"
                             onClick={() =>
                               perform(() =>
@@ -1099,28 +1387,18 @@ function App() {
                           </button>
                           <button
                             className="icon-button"
-                            aria-label={
-                              x.status === "deleted"
-                                ? "問題を復元"
-                                : "問題を削除"
-                            }
-                            onClick={() =>
-                              perform(() =>
-                                saveQ({
-                                  ...x,
-                                  status:
-                                    x.status === "deleted"
-                                      ? "active"
-                                      : "deleted",
-                                }),
+                            aria-label="問題を完全削除"
+                            title="問題を完全削除"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  "この問題を完全に削除しますか？問題と、この問題を含む演習履歴・編集履歴が削除され、元に戻せません。",
+                                )
                               )
-                            }
+                                void perform(() => deleteQuestion(x.id));
+                            }}
                           >
-                            {x.status === "deleted" ? (
-                              <RotateCcw size={18} />
-                            ) : (
-                              <Trash2 size={18} />
-                            )}
+                            <Trash2 size={18} />
                           </button>
                         </div>
                       ))
@@ -1128,50 +1406,30 @@ function App() {
                   </div>
                 </>
               )}
-              {(page === "materials" || page === "exams") && (
+              {page === "materials" && (
                 <>
                   <Heading
-                    eyebrow={
-                      page === "materials" ? "STUDY MATERIALS" : "PAST EXAMS"
-                    }
-                    title={
-                      page === "materials"
-                        ? "今年の資料を、学びの土台に。"
-                        : "過去問から、出題のかたちを。"
-                    }
-                    description={
-                      page === "materials"
-                        ? "問題の内容・正解・解説の根拠となる資料を登録します。"
-                        : "過去問は、出題形式・構成・文体の参考に使用します。"
-                    }
+                    eyebrow="STUDY MATERIALS"
+                    title="今年の資料を、学びの土台に。"
+                    description="問題の内容・正解・解説の根拠となる資料を登録します。"
                   />
-                  <Field label="PDFの解析方式">
-                    <select
-                      value={analysisMethod}
-                      onChange={(e) =>
-                        setAnalysisMethod(e.target.value as AnalysisMethod)
-                      }
-                      disabled={busy}
-                    >
-                      <option value="standard">
-                        標準抽出（PyMuPDF + ローカルOCR）
-                      </option>
-                      <option value="multimodal">
-                        LLMマルチモーダル（PDF画像優先）
-                      </option>
-                    </select>
-                    <span className="muted upload-method-help">
-                      文字化け・複雑なレイアウトには後者が有効です。OpenAI接続とAPI利用料が必要です。
-                    </span>
-                  </Field>
-                  <label className={"upload-zone " + (busy ? "disabled" : "")}>
+                  <div className="workflow-step">1. 資料を追加</div>
+                  <label
+                    className={"upload-zone " + (busy ? "disabled" : "")}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (!busy && e.dataTransfer.files.length)
+                        perform(() => runImports(fileItems(e.dataTransfer.files)));
+                    }}
+                  >
                     <span className="upload-icon">
                       <Upload size={26} />
                     </span>
                     <h3>
-                      {busy ? "資料を解析しています…" : "ファイルを選んで登録"}
+                      {busy ? "資料を読み込み中…" : "ファイルを選ぶ・ここにドロップ"}
                     </h3>
-                    <p>PDF・Excel (.xlsx)・画像・テキスト / 最大20MB</p>
+                    <p>PDF・Excel・PowerPoint・画像・テキスト / 複数可・各100MBまで。長い資料は自動で分割します。</p>
                     <span className="button">
                       ファイルを選択
                       <Plus size={16} />
@@ -1179,28 +1437,77 @@ function App() {
                     <input
                       aria-label="資料ファイル"
                       type="file"
+                      multiple
                       disabled={busy}
-                      accept=".pdf,.xlsx,.png,.jpg,.jpeg,.webp,.txt"
+                      accept=".pdf,.xlsx,.xls,.pptx,.ppt,.html,.htm,.png,.jpg,.jpeg,.webp,.txt"
                       onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f)
-                          perform(() =>
-                            upload(f, page, analysisMethod),
-                          );
+                        const items = e.target.files ? fileItems(e.target.files) : [];
+                        if (items.length)
+                          perform(() => runImports(items));
                         e.target.value = "";
                       }}
                     />
                   </label>
+                  <form className="url-import" onSubmit={(e) => {
+                    e.preventDefault();
+                    const value = urlInput.trim();
+                    if (!value) return;
+                    setUrlInput("");
+                    perform(() => runImports([{
+                      id: crypto.randomUUID(), name: value, url: value, status: "waiting",
+                    }]));
+                  }}>
+                    <input
+                      aria-label="WebページのURL"
+                      type="url"
+                      required
+                      placeholder="https://... WebページやPDFのURL"
+                      value={urlInput}
+                      disabled={busy}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                    />
+                    <button className="button" disabled={busy}>URLを追加</button>
+                  </form>
+                  <details className="import-options">
+                    <summary>PDFの読み取り方法を変更</summary>
+                    <Field label="読み取り方法">
+                      <select
+                        value={analysisMethod}
+                        onChange={(e) => setAnalysisMethod(e.target.value as AnalysisMethod)}
+                        disabled={busy}
+                      >
+                        <option value="standard">自動（テキスト抽出とOCR）</option>
+                        <option value="multimodal">OpenAIで画像を解析</option>
+                      </select>
+                      <span className="muted upload-method-help">文字化けしたPDF向け。OpenAI接続とAPI利用料が必要です。</span>
+                    </Field>
+                  </details>
+                  {!!imports.length && <div className="import-list" aria-live="polite">
+                    {imports.map((item) => <div className="import-item" key={item.id}>
+                      <span className="import-name">{item.name}</span>
+                      <span className={"import-status " + item.status}>
+                        {item.status === "waiting" ? "待機中" : item.status === "reading" ? "読み込み中" : item.status === "done" ? "読み込み済み" : "失敗"}
+                      </span>
+                      {item.status === "error" && <>
+                        <span className="import-error">{item.error}</span>
+                        <button className="text-button" disabled={busy} onClick={() => perform(() => runImports([{ ...item, status: "waiting" }]))}>再試行</button>
+                      </>}
+                    </div>)}
+                  </div>}
                   <div className="section-heading document-heading">
-                    <h3>登録した{page === "materials" ? "資料" : "過去問"}</h3>
-                    <span className="muted">{data[page].length} 件</span>
+                    <h3>登録した資料</h3>
+                    <span className="muted">{data.materials.length} 件</span>
                   </div>
                   <div className="document-grid">
-                    {data[page].map((d) => (
+                    {data.materials.map((d) => (
                       <button
                         key={d.id}
                         className="panel document-card"
-                        onClick={() => setDoc(structuredClone(d))}
+                        onClick={() => {
+                          perform(async () => {
+                            setDoc(await api(`/documents/materials/${d.id}`));
+                          });
+                        }}
                       >
                         <span className="document-icon">
                           <Files size={23} />
@@ -1226,11 +1533,55 @@ function App() {
                       </button>
                     ))}
                   </div>
-                  {!data[page].length && (
+                  {!data.materials.length && (
                     <div className="empty subtle">
                       まだ資料はありません。最初のファイルを登録しましょう。
                     </div>
                   )}
+                  <section className="panel quick-generate">
+                      <div className="workflow-step">2. 形式を選んで問題を作成</div>
+                      <h3>読み込んだ資料から問題を作る</h3>
+                      <p>登録済みの資料から新しい問題を作ります。再アップロードせず、使う資料・形式・問数・難易度を指定できます。</p>
+                      {!!data.materials.length && <fieldset className="source-picker">
+                        <legend>使う資料</legend>
+                        {data.materials.map((material) => {
+                          const chosen = selectedMaterialIds === null || selectedMaterialIds.includes(material.id);
+                          return <label className="source-option" key={material.id}>
+                            <input type="checkbox" checked={chosen} disabled={busy}
+                              onChange={(e) => {
+                                const current = selectedMaterialIds ?? data.materials.map((item) => item.id);
+                                setSelectedMaterialIds(e.target.checked
+                                  ? [...current, material.id]
+                                  : current.filter((id) => id !== material.id));
+                              }} />
+                            <span><strong>{material.name}</strong><small>{material.chunks.length} 範囲を読み込み済み</small></span>
+                          </label>;
+                        })}
+                      </fieldset>}
+                      <div className="quick-controls">
+                        <Field label="問題形式">
+                          <select value={quickType} disabled={busy} onChange={(e) => setQuickType(e.target.value as Question["question_type"])}>
+                            {Object.entries(typeNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+                          </select>
+                        </Field>
+                        <Field label="問数">
+                          <input type="number" min={1} max={1000} value={quickCount} disabled={busy} onChange={(e) => setQuickCount(Number(e.target.value))} />
+                        </Field>
+                        <Field label="難易度">
+                          <select value={quickDifficulty} disabled={busy} onChange={(e) => setQuickDifficulty(e.target.value)}>
+                            {["基礎", "標準", "応用"].map((level) => <option key={level}>{level}</option>)}
+                          </select>
+                        </Field>
+                      </div>
+                      {selectedSourceLocationCount > 0 && <p className="quick-mode-note">
+                        読み込んだ資料には約{selectedSourceLocationCount.toLocaleString()}個のページ・行範囲があります。未使用範囲を優先し、足りない場合は既使用範囲も別の問題に再利用します。既存問題はNGリストとして生成時に渡します。
+                      </p>}
+                      <p className="quick-mode-note">最大1,000問をバックグラウンドで作成します。画面を移動したり再読み込みしたりしても生成は続き、完了後に問題確認・演習へ移れます。問数に応じてAI利用料が増えます。</p>
+                      {data.provider === "mock" && <p className="quick-mode-note">現在は資料の抜粋を使う簡易生成です。OpenAI接続時は指定形式・難易度に沿った問題を生成します。</p>}
+                      <button className="button primary" disabled={busy || generationRunning || !data.materials.length} onClick={() => perform(quickGenerate)}>
+                        <Sparkles size={16} /> {generationRunning ? "生成中…" : busy ? "処理中…" : "問題を作成"}
+                      </button>
+                  </section>
                 </>
               )}
               {page === "recipes" && (
@@ -1238,7 +1589,7 @@ function App() {
                   <Heading
                     eyebrow="GENERATION RECIPES"
                     title="あなたの試験に合う、出題を。"
-                    description="今年の資料のカテゴリと、過去問の出題形式を組み合わせます。"
+                    description="今年の資料のカテゴリと問題形式を指定します。"
                     action={
                       <button
                         className="button primary"
@@ -1316,10 +1667,10 @@ function App() {
                           </button>
                           <button
                             className="button primary"
-                            disabled={busy}
+                            disabled={busy || generationRunning}
                             onClick={() =>
                               perform(async () => {
-                                await api("/generate", {
+                                const job: GenerationJob = await api("/generation-jobs/recipe", {
                                   method: "POST",
                                   body: JSON.stringify({
                                     recipe_id: r.id,
@@ -1327,13 +1678,12 @@ function App() {
                                     material_ids: r.material_ids || [],
                                   }),
                                 });
-                                await refresh();
-                                go("bank");
+                                setGenerationJob(job);
                               })
                             }
                           >
                             <Sparkles size={16} />
-                            {busy ? "生成中…" : "生成する"}
+                            {generationRunning ? "生成中…" : busy ? "受付中…" : "生成する"}
                           </button>
                         </div>
                       </section>
@@ -1607,32 +1957,55 @@ function App() {
             {editor.source_references.map((s, i) => (
               <details key={i}>
                 <summary>
-                  {s.material_name} {s.page_number} {s.sheet_name}{" "}
+                  {s.material_name} {s.page_number ? `p.${s.page_number}` : ""} {s.line_start ? `${sourceLineLabel(s.file_type, s.line_basis, s.ocr_confidence)} ${s.line_start}${s.line_end && s.line_end !== s.line_start ? `–${s.line_end}` : ""}` : ""} {s.char_start ? `文字 ${s.char_start}–${s.char_end}` : ""} {s.slide_number ? `スライド ${s.slide_number}` : ""} {s.sheet_name}{" "}
                   {s.cell_range}
                 </summary>
                 <p>{s.text}</p>
-                <a href={`/api/documents/materials/${s.material_id}/file`}>
-                  根拠資料をダウンロード
-                </a>
+                {data.materials.some(
+                  (material) => material.id === s.material_id,
+                ) ? (
+                  <a href={`/api/documents/materials/${s.material_id}/file`}>
+                    根拠資料をダウンロード
+                  </a>
+                ) : s.source_url ? (
+                  <a href={s.source_url} target="_blank" rel="noreferrer">
+                    登録元URLを開く
+                  </a>
+                ) : (
+                  <span className="muted">元資料は削除済みです</span>
+                )}
               </details>
             ))}
             <div className="modal-actions">
+              {editor.id && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || generationRunning}
+                  onClick={() => perform(async () => {
+                    await saveQ(editor);
+                    start([editor], "問題確認からの演習");
+                  })}
+                >
+                  この問題を演習
+                </button>
+              )}
               {editor.recipe_id && (
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || generationRunning}
                   className="button"
                   onClick={() =>
                     perform(async () => {
-                      await api("/questions/" + editor.id + "/regenerate", {
+                      const job: GenerationJob = await api(`/generation-jobs/questions/${editor.id}/regenerate`, {
                         method: "POST",
                       });
+                      setGenerationJob(job);
                       setEditor(null);
-                      await refresh();
                     })
                   }
                 >
-                  再生成して追加
+                  別の資料範囲から再生成
                 </button>
               )}
               <button className="button primary" disabled={busy}>
@@ -1654,7 +2027,7 @@ function App() {
               e.preventDefault();
               perform(async () => {
                 await api(
-                  `/documents/${page === "exams" ? "exams" : "materials"}/${doc.id}`,
+                  `/documents/materials/${doc.id}`,
                   {
                     method: "PUT",
                     body: JSON.stringify({ ...doc, status: "confirmed" }),
@@ -1672,137 +2045,22 @@ function App() {
                 onChange={(e) => setDoc({ ...doc, name: e.target.value })}
               />
             </Field>
-            {page === "exams" ? (
-              <>
-                <Field label="試験年度">
-                  <input
-                    value={doc.year}
-                    onChange={(e) => setDoc({ ...doc, year: e.target.value })}
-                  />
-                </Field>
-                <p className="muted">
-                  大問・小問、選択肢、空欄、語群、正解、文体を確認してください。正解の記載がない場合は手動で補います。
-                </p>
-                {doc.questions.map((pq, i) => (
-                  <section className="chunk" key={pq.id || i}>
-                    <h4>問 {pq.question_number}</h4>
-                    <div className="form-grid">
-                      <Field label="問題番号">
-                        <input
-                          value={pq.question_number || ""}
-                          onChange={(e) =>
-                            setDoc({
-                              ...doc,
-                              questions: doc.questions.map((x, j) =>
-                                i === j
-                                  ? { ...x, question_number: e.target.value }
-                                  : x,
-                              ),
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field label="親問題のID（小問の場合）">
-                        <input
-                          value={pq.parent_question_id || ""}
-                          onChange={(e) =>
-                            setDoc({
-                              ...doc,
-                              questions: doc.questions.map((x, j) =>
-                                i === j
-                                  ? { ...x, parent_question_id: e.target.value }
-                                  : x,
-                              ),
-                            })
-                          }
-                        />
-                      </Field>
-                    </div>
-                    <Field label="過去問の本文">
-                      <textarea
-                        rows={4}
-                        value={pq.raw_text}
-                        onChange={(e) =>
-                          setDoc({
-                            ...doc,
-                            questions: doc.questions.map((x, j) =>
-                              i === j
-                                ? {
-                                    ...x,
-                                    raw_text: e.target.value,
-                                    style_profile_json: {
-                                      ...x.style_profile_json,
-                                      length: e.target.value.length,
-                                    },
-                                  }
-                                : x,
-                            ),
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="過去問の選択肢（1行に1つ）">
-                      <textarea
-                        rows={3}
-                        value={(pq.choices || []).join("\n")}
-                        onChange={(e) =>
-                          setDoc({
-                            ...doc,
-                            questions: doc.questions.map((x, j) =>
-                              i === j
-                                ? { ...x, choices: e.target.value.split("\n") }
-                                : x,
-                            ),
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="過去問の正解">
-                      <input
-                        value={pq.answer || ""}
-                        onChange={(e) =>
-                          setDoc({
-                            ...doc,
-                            questions: doc.questions.map((x, j) =>
-                              i === j ? { ...x, answer: e.target.value } : x,
-                            ),
-                          })
-                        }
-                      />
-                    </Field>
-                    <p className="muted">
-                      本文 {pq.style_profile_json?.length || pq.raw_text.length}{" "}
-                      文字 · 空欄 {pq.structure_json?.blank_count || 0} 個
-                    </p>
-                  </section>
-                ))}
-                <details>
-                  <summary>構造・語群・文体の詳細を編集</summary>
-                  <JsonEditor
-                    label="詳細データ（JSON）"
-                    value={doc.questions}
-                    onChange={(questions) => setDoc({ ...doc, questions })}
-                  />
-                </details>
-              </>
-            ) : (
-              <Field label="カテゴリ（カンマ区切り・複数指定可）">
-                <input
-                  value={doc.categories.join(",")}
-                  onChange={(e) => {
-                    const cats = e.target.value.split(",").map((s) => s.trim());
-                    setDoc({
-                      ...doc,
+            <Field label="カテゴリ（カンマ区切り・複数指定可）">
+              <input
+                value={doc.categories.join(",")}
+                onChange={(e) => {
+                  const cats = e.target.value.split(",").map((s) => s.trim());
+                  setDoc({
+                    ...doc,
+                    categories: cats,
+                    chunks: doc.chunks.map((c) => ({
+                      ...c,
                       categories: cats,
-                      chunks: doc.chunks.map((c) => ({
-                        ...c,
-                        categories: cats,
-                      })),
-                    });
-                  }}
-                />
-              </Field>
-            )}
+                    })),
+                  });
+                }}
+              />
+            </Field>
             {doc.warnings.map((w, i) => (
               <div className="warning" key={i}>
                 {w}
@@ -1811,6 +2069,7 @@ function App() {
             <p className="muted">
               解析方式：{documentAnalysisLabel(doc)}{" "}
               · 抽出結果は編集して確定できます。
+              {doc.source_url && <><br />元のURL：<a href={doc.source_url} target="_blank" rel="noreferrer">{doc.source_url}</a></>}
               {doc.chunking && (
                 <>
                   <br />
@@ -1827,6 +2086,9 @@ function App() {
                   {c.page_number
                     ? `ページ ${c.page_number}`
                     : `チャンク ${i + 1}`}{" "}
+                  {c.line_start ? `${sourceLineLabel(doc.file_type, c.line_basis, c.ocr_confidence)} ${c.line_start}${c.line_end && c.line_end !== c.line_start ? `–${c.line_end}` : ""}` : ""}{" "}
+                  {c.char_start ? `文字 ${c.char_start}–${c.char_end}` : ""}{" "}
+                  {c.slide_number ? `スライド ${c.slide_number}` : ""}{" "}
                   {c.sheet_name} {c.cell_range}{" "}
                   {c.ocr_confidence !== undefined &&
                     `OCR信頼度 ${c.ocr_confidence}%`}
@@ -1844,38 +2106,59 @@ function App() {
                     })
                   }
                 />
-                {page === "materials" && (
-                  <Field label="この範囲のカテゴリ">
-                    <input
-                      value={(c.categories || []).join(",")}
-                      onChange={(e) =>
-                        setDoc({
-                          ...doc,
-                          chunks: doc.chunks.map((x, j) =>
-                            j === i
-                              ? {
-                                  ...x,
-                                  categories: e.target.value
-                                    .split(",")
-                                    .map((s) => s.trim()),
-                                }
-                              : x,
-                          ),
-                        })
-                      }
-                    />
-                  </Field>
-                )}
+                <Field label="この範囲のカテゴリ">
+                  <input
+                    value={(c.categories || []).join(",")}
+                    onChange={(e) =>
+                      setDoc({
+                        ...doc,
+                        chunks: doc.chunks.map((x, j) =>
+                          j === i
+                            ? {
+                                ...x,
+                                categories: e.target.value
+                                  .split(",")
+                                  .map((s) => s.trim()),
+                              }
+                            : x,
+                        ),
+                      })
+                    }
+                  />
+                </Field>
               </section>
             ))}
             <div className="modal-actions">
               <a
                 className="button"
-                href={`/api/documents/${page === "exams" ? "exams" : "materials"}/${doc.id}/file`}
+                href={`/api/documents/materials/${doc.id}/file`}
               >
                 <Download size={16} />
                 原本
               </a>
+              <button
+                type="button"
+                className="button danger"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm(
+                    `「${doc.name}」を資料一覧から削除しますか？\n生成済み問題と保存済みの根拠抜粋は残ります。元ファイルは削除されます。この資料を使うレシピは資料設定の更新が必要です。`,
+                  )) return;
+                  perform(async () => {
+                    await api(`/documents/materials/${doc.id}`, { method: "DELETE" });
+                    setSelectedMaterialIds((current) =>
+                      current === null
+                        ? null
+                        : current.filter((id) => id !== doc.id),
+                    );
+                    setDoc(null);
+                    await refresh();
+                  });
+                }}
+              >
+                <Trash2 size={16} />
+                削除
+              </button>
               <button className="button primary" disabled={busy}>
                 確認して保存
               </button>
@@ -1937,6 +2220,26 @@ function App() {
               <p className="muted">
                 資料を指定すると、その資料のうち上のカテゴリに一致する範囲だけを根拠にします。未選択の場合はカテゴリに一致する全資料を使用します。
               </p>
+              {(recipe.material_ids || []).filter(
+                (id) => !data.materials.some((material) => material.id === id),
+              ).map((id) => (
+                <label className="source-option" key={id}>
+                  <input
+                    type="checkbox"
+                    checked
+                    onChange={() => setRecipe({
+                      ...recipe,
+                      material_ids: (recipe.material_ids || []).filter(
+                        (selectedId) => selectedId !== id,
+                      ),
+                    })}
+                  />
+                  <span>
+                    <strong>削除済み資料 · …{id.slice(-8)}</strong>
+                    <small>選択を外してください。資料指定が空になると全資料が対象になります。</small>
+                  </span>
+                </label>
+              ))}
               {data.materials.length ? (
                 data.materials.map((material) => {
                   const selected = (recipe.material_ids || []).includes(
@@ -1975,26 +2278,6 @@ function App() {
                 <p className="muted">先に試験範囲の資料を登録してください。</p>
               )}
             </fieldset>
-            <Field label="参考にする過去問の形式">
-              <select
-                value={recipe.reference_past_question_id}
-                onChange={(e) =>
-                  setRecipe({
-                    ...recipe,
-                    reference_past_question_id: e.target.value,
-                  })
-                }
-              >
-                <option value="">指定しない</option>
-                {data.exams.flatMap((d) =>
-                  d.questions.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {d.name} / 問{p.question_number}
-                    </option>
-                  )),
-                )}
-              </select>
-            </Field>
             <div className="form-grid">
               <Field label="問題形式">
                 <select
@@ -2221,43 +2504,6 @@ function Modal({
     </div>
   );
 }
-function JsonEditor({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: any[];
-  onChange: (v: any[]) => void;
-}) {
-  const [text, setText] = useState(JSON.stringify(value, null, 2));
-  const input = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    if (document.activeElement !== input.current) setText(JSON.stringify(value, null, 2));
-  }, [value]);
-  return (
-    <Field label={label}>
-      <textarea
-        ref={input}
-        className="code-input"
-        rows={14}
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          try {
-            const parsed = JSON.parse(e.target.value);
-            if (!Array.isArray(parsed)) throw Error();
-            onChange(parsed);
-            e.target.setCustomValidity("");
-          } catch {
-            e.target.setCustomValidity("正しいJSON配列を入力してください");
-          }
-        }}
-      />
-    </Field>
-  );
-}
-
 if ("serviceWorker" in navigator)
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 createRoot(document.getElementById("root")!).render(<App />);

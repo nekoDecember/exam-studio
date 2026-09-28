@@ -68,3 +68,142 @@ def put_many(kind, items):
                 "INSERT INTO entities VALUES (?,?,?)",
                 (kind, item["id"], json.dumps(item, ensure_ascii=False)),
             )
+
+
+def delete(kind, id):
+    with connect() as c:
+        result = c.execute(
+            "DELETE FROM entities WHERE kind=? AND id=?", (kind, id)
+        )
+    return result.rowcount > 0
+
+
+def _remove_question_from_attempt(attempt, question_ids):
+    if not isinstance(attempt, dict) or not isinstance(attempt.get("questions"), list):
+        return attempt, False
+
+    questions = [
+        question
+        for question in attempt["questions"]
+        if isinstance(question, dict)
+        and isinstance(question.get("id"), str)
+        and question.get("id") in question_ids
+    ]
+    kept_ids = {question["id"] for question in questions}
+    cleaned = {**attempt, "questions": questions}
+    changed = questions != attempt["questions"]
+    for key in ("answers", "results", "flags", "notes"):
+        values = attempt.get(key)
+        if isinstance(values, dict):
+            filtered = {question_id: value for question_id, value in values.items() if question_id in kept_ids}
+            if filtered != values:
+                cleaned[key] = filtered
+                changed = True
+    if changed:
+        cleaned["updated_at"] = now()
+        revision = cleaned.get("revision", 0)
+        if isinstance(revision, int):
+            cleaned["revision"] = revision + 1
+        if isinstance(cleaned.get("index"), int):
+            cleaned["index"] = min(cleaned["index"], max(0, len(questions) - 1))
+    return cleaned, changed
+
+
+def delete_question(id):
+    """Permanently delete a question and snapshots that contain its content."""
+    with connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT payload FROM entities WHERE kind=? AND id=?", ("questions", id)
+        ).fetchone()
+        if not row:
+            return False
+
+        question = json.loads(row[0])
+        c.execute("DELETE FROM entities WHERE kind=? AND id=?", ("questions", id))
+
+        history_rows = c.execute(
+            "SELECT id, payload FROM entities WHERE kind=?", ("history",)
+        ).fetchall()
+        for history_id, payload in history_rows:
+            if json.loads(payload).get("question_id") == id:
+                c.execute(
+                    "DELETE FROM entities WHERE kind=? AND id=?",
+                    ("history", history_id),
+                )
+
+        question_rows = c.execute(
+            "SELECT id FROM entities WHERE kind=?", ("questions",)
+        ).fetchall()
+        question_ids = {item[0] for item in question_rows}
+        attempt_rows = c.execute(
+            "SELECT id, payload FROM entities WHERE kind=?", ("attempts",)
+        ).fetchall()
+        for attempt_id, payload in attempt_rows:
+            attempt = json.loads(payload)
+            cleaned, changed = _remove_question_from_attempt(attempt, question_ids)
+            if changed:
+                if attempt.get("questions") and not cleaned["questions"]:
+                    c.execute(
+                        "DELETE FROM entities WHERE kind=? AND id=?",
+                        ("attempts", attempt_id),
+                    )
+                else:
+                    c.execute(
+                        "UPDATE entities SET payload=? WHERE kind=? AND id=?",
+                        (json.dumps(cleaned, ensure_ascii=False), "attempts", attempt_id),
+                    )
+
+        set_id = question.get("question_set_id")
+        if isinstance(set_id, str) and set_id:
+            set_row = c.execute(
+                "SELECT payload FROM entities WHERE kind=? AND id=?", ("sets", set_id)
+            ).fetchone()
+            if set_row:
+                set_item = json.loads(set_row[0])
+                remaining = sum(
+                    1
+                    for payload, in c.execute(
+                        "SELECT payload FROM entities WHERE kind=?", ("questions",)
+                    )
+                    if json.loads(payload).get("question_set_id") == set_id
+                )
+                if remaining:
+                    set_item["question_count"] = remaining
+                    c.execute(
+                        "UPDATE entities SET payload=? WHERE kind=? AND id=?",
+                        (json.dumps(set_item, ensure_ascii=False), "sets", set_id),
+                    )
+                else:
+                    c.execute("DELETE FROM entities WHERE kind=? AND id=?", ("sets", set_id))
+    return True
+
+
+def purge_deleted_questions():
+    """Remove questions left behind by the former soft-delete behavior."""
+    deleted_ids = [
+        item["id"]
+        for item in all_items("questions")
+        if item.get("status") == "deleted"
+    ]
+    return sum(delete_question(question_id) for question_id in deleted_ids)
+
+
+def sanitize_attempt(attempt, connection=None):
+    """Remove question snapshots that no longer exist from synced attempts."""
+    if connection is not None:
+        question_ids = {
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM entities WHERE kind=?", ("questions",)
+            )
+        }
+        return _remove_question_from_attempt(attempt, question_ids)
+    with connect() as c:
+        question_ids = {
+            row[0]
+            for row in c.execute(
+                "SELECT id FROM entities WHERE kind=?", ("questions",)
+            )
+        }
+    return _remove_question_from_attempt(attempt, question_ids)
