@@ -27,7 +27,7 @@ from .dedupe import (
     source_locations_overlap,
     unused_source_locations,
 )
-from .models import Generation, Grade, Question, Recipe
+from .models import BulkQuestionDeletion, Generation, Grade, Question, Recipe
 from .parser import ALLOWED, MAX_CHUNK_CHARS, parse, split_chunks
 from .providers import PROMPT_VERSION, OpenAIAPIError, provider
 from .question_quality import has_substantive_source_text
@@ -454,6 +454,12 @@ def delete_question(id: str):
     if not db.delete_question(id):
         raise HTTPException(404, "問題が見つかりません")
     return {"id": id, "deleted": True}
+
+
+@app.post("/api/questions/bulk-delete")
+def bulk_delete_questions(request: BulkQuestionDeletion):
+    deleted_ids = db.delete_questions(request.ids)
+    return {"ids": deleted_ids, "deleted": len(deleted_ids)}
 
 
 @app.get("/api/questions/{id}/history")

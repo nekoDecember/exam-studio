@@ -947,9 +947,49 @@ summary {
 .list-caption {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 14px;
   font-size: 10px;
   color: #9ca594;
   margin: 18px 0;
+}
+.bank-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.bulk-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bulk-select input,
+.question-select {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0;
+  accent-color: #28634f;
+  flex: 0 0 auto;
+}
+.bulk-select {
+  color: #68816b;
+}
+.selected-count {
+  color: #526b5c;
+  white-space: nowrap;
+}
+.bulk-delete {
+  padding: 7px 10px;
+}
+.bank-list-actions .text-button:disabled,
+.bulk-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .bank-row {
   display: flex;
@@ -957,6 +997,9 @@ summary {
   gap: 16px;
   border-bottom: 1px solid #edf0e9;
   padding: 20px 0;
+}
+.question-select {
+  margin-left: 2px;
 }
 .bank-row:last-child {
   border: 0;
@@ -1695,6 +1738,18 @@ summary {
   }
   .bank-row {
     gap: 6px;
+  }
+  .list-caption {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .bank-list-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+  .bulk-delete {
+    font-size: 10px;
   }
   .row-number {
     display: none;

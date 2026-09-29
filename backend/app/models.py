@@ -87,3 +87,15 @@ class Generation(BaseModel):
 class Grade(BaseModel):
     question: Question
     answer: str = Field(max_length=12000)
+
+
+class BulkQuestionDeletion(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=10000)
+
+    @field_validator("ids")
+    @classmethod
+    def validate_ids(cls, value):
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("問題IDの指定が不正です")
+        return list(dict.fromkeys(cleaned))

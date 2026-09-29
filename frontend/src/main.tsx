@@ -119,6 +119,7 @@ function App() {
     [quickCount, setQuickCount] = useState(5),
     [generationJob, setGenerationJob] = useState<GenerationJob>(),
     [quickDifficulty, setQuickDifficulty] = useState("標準");
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const current = useRef<Attempt | undefined>(undefined),
     writeQueue = useRef(Promise.resolve()),
     generation = useRef(0),
@@ -138,6 +139,9 @@ function App() {
     const d = await api("/bootstrap");
     const questionIds = new Set<string>(
       d.questions.map((question: Question) => question.id),
+    );
+    setSelectedQuestionIds((selected) =>
+      selected.filter((id) => questionIds.has(id)),
     );
     const local = await purgeMissingQuestions(
       questionIds,
@@ -340,11 +344,13 @@ function App() {
       setError("対象の問題がありません。問題バンクで条件を変更してください。");
       return;
     }
+    setSelectedQuestionIds([]);
     persist(newAttempt(questions, name));
     setPage("practice");
   }
   function go(p: Page) {
     setPage(p);
+    if (p !== "bank") setSelectedQuestionIds([]);
     setError("");
     setSearch("");
     setCat("すべて");
@@ -378,6 +384,27 @@ function App() {
       (filter !== "wrong" || wrongIds.has(q.id)) &&
       (q.body + q.category).toLowerCase().includes(search.toLowerCase()),
   );
+  const selectedQuestionIdSet = new Set(selectedQuestionIds);
+  const storedQuestionIdSet = new Set(data.questions.map((question) => question.id));
+  const allVisibleQuestionsSelected =
+    filtered.length > 0 &&
+    filtered.every((question) => selectedQuestionIdSet.has(question.id));
+  function setVisibleQuestionsSelected(checked: boolean) {
+    const visibleIds = new Set(filtered.map((question) => question.id));
+    setSelectedQuestionIds((selected) => {
+      const next = new Set(selected);
+      if (checked) visibleIds.forEach((id) => next.add(id));
+      else visibleIds.forEach((id) => next.delete(id));
+      return [...next];
+    });
+  }
+  function setQuestionSelected(id: string, checked: boolean) {
+    setSelectedQuestionIds((selected) =>
+      checked
+        ? [...new Set([...selected, id])]
+        : selected.filter((selectedId) => selectedId !== id),
+    );
+  }
   const q = attempt?.questions[attempt.index],
     result = q ? attempt?.results[q.id] : undefined;
   function navigate(delta: number) {
@@ -461,6 +488,18 @@ function App() {
   }
   async function deleteQuestion(id: string) {
     await api(`/questions/${id}`, { method: "DELETE" });
+    setSelectedQuestionIds((selected) => selected.filter((item) => item !== id));
+    await refresh();
+  }
+  async function deleteQuestions(ids: string[]) {
+    await api("/questions/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+    const deletedIds = new Set(ids);
+    setSelectedQuestionIds((selected) =>
+      selected.filter((id) => !deletedIds.has(id)),
+    );
     await refresh();
   }
   function freshQ(): Question {
@@ -1333,12 +1372,59 @@ function App() {
                     </div>
                     <div className="list-caption">
                       <span>{filtered.length} 問の問題</span>
-                      <button
-                        className="text-button"
-                        onClick={() => start(filtered, "選択した条件で演習")}
-                      >
-                        この条件で演習 <Play size={14} />
-                      </button>
+                      <div className="bank-list-actions">
+                        <label className="bulk-select">
+                          <input
+                            type="checkbox"
+                            aria-label="表示中の問題をすべて選択"
+                            checked={allVisibleQuestionsSelected}
+                            disabled={busy || !filtered.length}
+                            onChange={(event) =>
+                              setVisibleQuestionsSelected(event.target.checked)
+                            }
+                          />
+                          <span>表示中を全選択</span>
+                        </label>
+                        {selectedQuestionIds.length > 0 && (
+                          <>
+                            <span className="selected-count">
+                              {selectedQuestionIds.length}問を選択中
+                            </span>
+                            <button
+                              className="button danger bulk-delete"
+                              disabled={busy}
+                              onClick={() => {
+                                const ids = selectedQuestionIds.filter((id) =>
+                                  storedQuestionIdSet.has(id),
+                                );
+                                if (
+                                  ids.length &&
+                                  window.confirm(
+                                    `${ids.length}問を完全に削除しますか？問題と、対象の演習履歴・編集履歴が削除され、元に戻せません。`,
+                                  )
+                                )
+                                  void perform(() => deleteQuestions(ids));
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              選択した問題を削除
+                            </button>
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() => setSelectedQuestionIds([])}
+                            >
+                              選択解除
+                            </button>
+                          </>
+                        )}
+                        <button
+                          className="text-button"
+                          onClick={() => start(filtered, "選択した条件で演習")}
+                        >
+                          この条件で演習 <Play size={14} />
+                        </button>
+                      </div>
                     </div>
                     {!filtered.length ? (
                       <div className="empty">条件に合う問題がありません。</div>
@@ -1348,6 +1434,16 @@ function App() {
                           <span className="row-number">
                             {String(i + 1).padStart(2, "0")}
                           </span>
+                          <input
+                            className="question-select"
+                            type="checkbox"
+                            aria-label={`問題を削除対象に選択: ${x.body.slice(0, 80)}`}
+                            checked={selectedQuestionIdSet.has(x.id)}
+                            disabled={busy}
+                            onChange={(event) =>
+                              setQuestionSelected(x.id, event.target.checked)
+                            }
+                          />
                           <button
                             className="bank-body"
                             onClick={() => setEditor(structuredClone(x))}

@@ -109,24 +109,50 @@ def _remove_question_from_attempt(attempt, question_ids):
     return cleaned, changed
 
 
-def delete_question(id):
-    """Permanently delete a question and snapshots that contain its content."""
+def delete_questions(ids):
+    """Permanently delete questions and all snapshots that contain them."""
+    requested_ids = list(dict.fromkeys(ids))
+    if not requested_ids:
+        return []
+    requested_set = set(requested_ids)
     with connect() as c:
         c.execute("BEGIN IMMEDIATE")
-        row = c.execute(
-            "SELECT payload FROM entities WHERE kind=? AND id=?", ("questions", id)
-        ).fetchone()
-        if not row:
-            return False
-
-        question = json.loads(row[0])
-        c.execute("DELETE FROM entities WHERE kind=? AND id=?", ("questions", id))
+        question_rows = c.execute(
+            "SELECT id, payload FROM entities WHERE kind=?", ("questions",)
+        ).fetchall()
+        selected_by_id = {
+            question_id: json.loads(payload)
+            for question_id, payload in question_rows
+            if question_id in requested_set
+        }
+        deleted_ids = [
+            question_id
+            for question_id in requested_ids
+            if question_id in selected_by_id
+        ]
+        if not deleted_ids:
+            return []
+        selected_questions = [
+            (question_id, selected_by_id[question_id])
+            for question_id in deleted_ids
+        ]
+        deleted_set = set(deleted_ids)
+        set_ids = {
+            question.get("question_set_id")
+            for _, question in selected_questions
+            if isinstance(question.get("question_set_id"), str)
+            and question["question_set_id"]
+        }
+        c.executemany(
+            "DELETE FROM entities WHERE kind=? AND id=?",
+            [("questions", question_id) for question_id in deleted_ids],
+        )
 
         history_rows = c.execute(
             "SELECT id, payload FROM entities WHERE kind=?", ("history",)
         ).fetchall()
         for history_id, payload in history_rows:
-            if json.loads(payload).get("question_id") == id:
+            if json.loads(payload).get("question_id") in deleted_set:
                 c.execute(
                     "DELETE FROM entities WHERE kind=? AND id=?",
                     ("history", history_id),
@@ -154,20 +180,24 @@ def delete_question(id):
                         (json.dumps(cleaned, ensure_ascii=False), "attempts", attempt_id),
                     )
 
-        set_id = question.get("question_set_id")
-        if isinstance(set_id, str) and set_id:
+        if set_ids:
+            remaining_rows = c.execute(
+                "SELECT payload FROM entities WHERE kind=?", ("questions",)
+            ).fetchall()
+            remaining_counts = {}
+            for (payload,) in remaining_rows:
+                set_id = json.loads(payload).get("question_set_id")
+                if isinstance(set_id, str) and set_id in set_ids:
+                    remaining_counts[set_id] = remaining_counts.get(set_id, 0) + 1
+        else:
+            remaining_counts = {}
+        for set_id in set_ids:
             set_row = c.execute(
                 "SELECT payload FROM entities WHERE kind=? AND id=?", ("sets", set_id)
             ).fetchone()
             if set_row:
                 set_item = json.loads(set_row[0])
-                remaining = sum(
-                    1
-                    for payload, in c.execute(
-                        "SELECT payload FROM entities WHERE kind=?", ("questions",)
-                    )
-                    if json.loads(payload).get("question_set_id") == set_id
-                )
+                remaining = remaining_counts.get(set_id, 0)
                 if remaining:
                     set_item["question_count"] = remaining
                     c.execute(
@@ -176,7 +206,12 @@ def delete_question(id):
                     )
                 else:
                     c.execute("DELETE FROM entities WHERE kind=? AND id=?", ("sets", set_id))
-    return True
+    return deleted_ids
+
+
+def delete_question(id):
+    """Permanently delete a question and snapshots that contain its content."""
+    return id in delete_questions([id])
 
 
 def purge_deleted_questions():
