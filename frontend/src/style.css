@@ -1159,7 +1159,7 @@ summary {
 }
 .quick-controls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin: 18px 0;
 }
@@ -1820,4 +1820,62 @@ summary {
 .choice:disabled {
   opacity: 1;
   cursor: default;
+}
+
+/* Clear choices and comfortable touch targets for generation and LAN devices. */
+.quick-generate { margin-bottom: 30px; }
+.quick-generate h3 { font-size: 21px; margin-bottom: 8px; }
+.quick-generate p { color: #52665e; }
+.source-picker legend, .question-format-picker legend { font-size: 13px; color: #324c40; font-weight: 650; }
+.source-picker-actions { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 8px; }
+.source-picker-actions button { min-height: 40px; }
+.source-options { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.source-option { min-height: 48px; align-items: center; padding: 12px 8px; border-radius: 6px; }
+.source-option input { width: 18px; height: 18px; accent-color: #236d59; flex-shrink: 0; }
+.source-option strong { font-size: 13px; }
+.source-option.chosen { background: #f0f7f2; }
+.question-format-picker { border: 0; padding: 0; margin: 20px 0; min-width: 0; }
+.format-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.format-option { border: 1px solid #dce4df; border-radius: 9px; padding: 14px 10px; display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.format-option.chosen { background: #eef7f2; border-color: #347b61; }
+.format-option input { accent-color: #236d59; margin: 4px 0 0; }
+.format-option small, .generation-submit small { display: block; color: #52665e; margin-top: 4px; font-size: 12px; }
+.count-presets { display: flex; gap: 8px; margin-bottom: 8px; }
+.count-presets button { flex: 1; min-height: 42px; border: 1px solid #dce4df; border-radius: 6px; }
+.count-presets .chosen { color: #16533e; background: #eef7f2; border-color: #347b61; font-weight: 650; }
+.field-error { color: #98372a; }
+.field-hint { color: #52665e; }
+.quality-note { background: #eef7f2; border-radius: 8px; display: flex; align-items: flex-start; gap: 9px; padding: 14px; margin: 18px 0; color: #236d59; }
+.generation-submit { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-top: 16px; border-top: 1px solid #e1e8e3; }
+.generation-submit .button { min-height: 48px; flex-shrink: 0; }
+.generation-job { position: relative; padding-right: 44px; }
+.generation-job .import-status { display: inline-flex; gap: 6px; align-items: center; }
+.generation-job.partial { background: #fffcf3; border-color: #e4d9b3; }
+.generation-job.failed { background: #fff8f6; border-color: #e5c2b9; }
+.job-dismiss { position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; }
+.import-status.partial { color: #755610; }
+button, .button, .icon-button { touch-action: manipulation; }
+@media (max-width: 950px) {
+  .format-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .generation-submit { align-items: stretch; flex-direction: column; gap: 12px; }
+  .generation-submit .button, .generation-job-actions .button { min-height: 48px; width: 100%; }
+  .generation-job { padding-right: 36px; }
+  .quick-controls { grid-template-columns: 1fr; }
+  input, textarea, select { font-size: 16px; }
+  .format-option { min-height: 82px; }
+}
+.materials-import { border: 1px solid #dce4df; border-radius: 9px; background: #fff; padding: 16px 20px; }
+.materials-import > summary { cursor: pointer; color: #236d59; font-weight: 650; min-height: 28px; }
+.materials-import > summary span { color: #52665e; font-size: 12px; font-weight: 400; margin-left: 12px; }
+.materials-import[open] > summary { margin-bottom: 16px; }
+.materials-import .upload-zone { margin-top: 0; }
+.nav-mobile-label { display: none; }
+@media (max-width: 560px) {
+  .nav-full-label { display: none; }
+  .nav-mobile-label { display: block; font-size: 10px; line-height: 1.2; }
+  .nav-item { flex-direction: column; gap: 5px; padding: 8px 0; min-height: 54px; }
+  .sidebar { height: calc(66px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
+  .content { padding-bottom: calc(85px + env(safe-area-inset-bottom)); }
 }

@@ -1,5 +1,6 @@
 import { openDB } from "idb";
 import type { Attempt, Data, Question, Result } from "./types";
+import { randomId } from "./ids";
 const database = () =>
   openDB("exam-studio", 1, {
     upgrade(db) {
@@ -106,7 +107,7 @@ export async function syncAttempts() {
 }
 export function newAttempt(questions: Question[], name: string): Attempt {
   return {
-    id: crypto.randomUUID(),
+    id: randomId(),
     name,
     questions: structuredClone(questions),
     index: 0,

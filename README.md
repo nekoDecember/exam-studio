@@ -55,7 +55,9 @@ docker compose up -d --force-recreate
 
 参照仕様：[OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
 
-生成物には参照資料、モデル、生成日時、プロンプトバージョンを保存します。抽出資料を最大4行の範囲に分け、未使用範囲を優先しますが、別の問題を作れるよう既使用範囲も再利用できます。モデルには本文と不透明な参照キーに加え、同じ資料に関する既存問題や直前の候補をNGリストとして渡します。本文で裏付けられる数値・固有名称・条件は、直接想起も含めて出題します。保存前は問題形式を検証し、正規化した問題文と解答が既存問題と一致する場合だけ作り直します。話題や資料範囲の重なりだけでは候補を棄却しません。問題生成はサーバー側ジョブで進み、画面移動や再読み込み後も状態を確認できます。直接生成は20問ごとに保存し、途中で失敗しても保存済み分を問題バンクで確認できます。AI障害時も資料の抽出結果は保存され、手動修正できます。
+生成物には参照資料、モデル、生成日時、プロンプトと品質基準のバージョンを保存します。資料は原則4行の範囲に分け、未使用範囲を優先します。重要な数値・名称・条件の暗記問題も出題しますが、入力資料の書類名・記載場所やグラフの目盛りの本数など、学習に役立たない問いは保存前に除外します。OpenAI接続時は生成とは別に「学習価値・資料の根拠・対象の明確さ」を審査します。
+
+形式や表現の不備は同じ範囲で最大2回作り直し、題材自体が不適切なら別の範囲へ移ります。候補生成はジョブ全体で目標問数の3倍まで。適した題材が足りなければ、指定より少ない問数で終了します。直接生成は最大20問のバッチごとに審査済みの問題だけ保存し、途中のAPI障害でも保存済み分は残ります。生成の進み具合と保存数は画面を移動・再読み込みしても確認できます。
 
 ## 保存とオフライン利用
 
@@ -72,6 +74,20 @@ docker compose up -d --force-recreate
 標準抽出では、PDFの本文をPyMuPDFでページ単位・読み順付きに抽出し、Excelはシートと40行ごとのセル範囲を、PowerPointはスライドごとのテキストを抽出します。旧形式XLS/PPTはLibreOfficeで変換して読み取ります。Webページは表示テキストを抽出し、スクリプト・ナビゲーション等を除きます。画像ページや文字の少ないPDFページはTesseract（日本語・英語）でOCRします。画像だけのPowerPointスライドや複雑な表の厳密な復元は対象外です。文字化けしたPDFには詳細設定の「OpenAIで画像を解析」を利用できます。抽出結果は確認・修正してください。
 
 上限は1ファイルまたは1 URLあたり100MB、Excelシート250,000行・2,000列です。PDFページ数の固定上限はありません。抽出本文は1チャンク12,000文字、登録時のAI解析は1バッチ48,000文字、問題生成は1入力バッチ60,000文字を上限として自動分割します。1回に最大1,000問を指定でき、サーバー側で順に作成・保存します。新しい範囲を優先して使い、資料範囲数より問数が多い場合や既使用範囲しかない場合は範囲を再利用します。URLは公開HTTP/HTTPSの標準ポートのみ対応します。ログインが必要なページ、暗号化されたPDFは登録前に公開・解除してください。
+
+## 同一LANから使う
+
+`.env` を設定し、Docker/Colimaを起動した状態で実行します。
+
+```sh
+./scripts/deploy-lan.sh
+```
+
+既存コンテナのCompose構成を引き継ぎ、Gateway・監視ネットワーク・保存volumeを保ちながらLANポートを追加します。新規起動では `compose.yaml` と `compose.lan.yaml` を使います。`docker compose` と `docker-compose` の両方に対応します。出力された `http://<MacのLAN IP>:8080` を同じLAN上の端末で開いてください。IPが変わった場合はスクリプトの出力を確認します。
+
+ポートは `LAN_PORT`、待ち受けアドレスは `LAN_BIND_IP` で変更できます。コンテナは `restart: unless-stopped` で常駐し、このMacではColimaのログイン時自動起動も有効です。LANポートは `compose.lan.yaml` を指定したときだけ追加します。本番更新は既存Gateway経由で実行します。
+
+HTTPのLAN接続でも資料追加・演習・IndexedDB保存・API同期が使えます。Service Workerによるアプリ画面のオフライン起動はHTTPSまたはlocalhostで利用できます。ブラウザの保存先はオリジンごとなので、公開URLとLAN URLの端末保存はそれぞれ独立しています。
 
 ## 開発・検証
 
@@ -103,7 +119,7 @@ CIではAPI・保存・採点・資料解析・OCR・AIアダプタ契約のテ�
 
 ## 公開とデータ管理
 
-このリポジトリはアプリのソースと架空のサンプルだけを公開します。登録原本、DB、演習記録、`.env`、APIキーはGit管理対象外です。アプリ自体には認証を設けず、Composeの公開ポートを `127.0.0.1` に限定しています。認証を追加せずにインターネットへホストしないでください。
+このリポジトリはアプリのソースと架空のサンプルだけを公開します。登録原本、DB、演習記録、`.env`、APIキーはGit管理対象外です。通常のComposeはホストの `127.0.0.1` だけで待ち受けます。同一LANで利用するときは「同一LANから使う」の起動方法を使います。LANでは同じ保存データを共有し、Cloudflareの公開URLには既存のAccessが適用されます。
 
 ソース構成・設計上の制約は [docs/architecture.md](docs/architecture.md)、検証記録は [docs/verification.md](docs/verification.md) を参照してください。
 
@@ -111,9 +127,7 @@ CIではAPI・保存・採点・資料解析・OCR・AIアダプタ契約のテ�
 
 `public-gateway` の公開サービス・リポジトリCSVに `exam-studio` として登録しています。
 公開先は `https://exam.nekodec.party`（`SANDBOX_DOMAIN=nekodec.party`）、Accessは既存の `owner` ポリシーです。
-このURLは公開先として予約した設定です。DNS・Access・Tunnelは管理用認証がある端末で反映してください。
-公開用Composeはホストポートを削除し、Gatewayが専用の `public-exam-studio` networkを付与します。
-DNS・Access・Tunnelへの実反映は、設定済みの管理端末でTerraform plan確認後に実施します。
+このURLは稼働中の本番公開先です。公開用Composeはホストポートを公開せず、Gatewayが専用の `public-exam-studio` networkを付与します。公開URLの通信は既存のAccess・トンネル経路を使用します。
 
 監視は `observability` network経由の `/api/health` HTTP probe、Dockerのhealth・リソース・OS情報、Alloy/Lokiのログを使用します。
 `monitoring-starter` の全体起動一覧・Prometheusの固定ターゲットにも登録しています。
@@ -124,12 +138,11 @@ DNS・Access・Tunnelへの実反映は、設定済みの管理端末でTerrafor
 docker compose -f compose.yaml -f compose.monitoring.override.yaml up -d --build
 ```
 
-Cloudflareで公開する場合は、設定済みの `public-gateway` で実行します。
+本番アプリを更新する場合は、設定済みの `public-gateway` で実行します。
 
 ```sh
 make apps-up APPS=exam-studio
-make gateway-up
-# 続いてCloudflareのplan/apply（既存stateと認証がある管理端末で）
+# 既存のDNS・Access・Tunnelは更新不要
 ```
 
 監視上のサービス名は `exam-studio` です。GrafanaのEnvironmentは `local` を選択します。

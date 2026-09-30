@@ -44,6 +44,8 @@ import {
 import type { Data, Question, Attempt, Recipe, Doc, GenerationJob } from "./types";
 import { typeNames } from "./types";
 import "./style.css";
+import { randomId } from "./ids";
+import { GenerationStatus } from "./GenerationStatus";
 
 type Page =
   | "home"
@@ -249,12 +251,12 @@ function App() {
       try {
         const latest: GenerationJob = await api(`/generation-jobs/${generationJob.id}`);
         if (!live) return;
-        if (latest.status === "complete" || latest.status === "failed") {
+        if (["complete", "partial", "failed"].includes(latest.status)) {
           try {
             await refresh();
           } catch {
             setError(
-              latest.status === "complete"
+              latest.status !== "failed"
                 ? "生成は完了しましたが、問題一覧を更新できませんでした。再読み込みしてください。"
                 : "生成は中断されました。保存済みの問題一覧を更新できませんでした。再読み込みしてください。",
             );
@@ -587,7 +589,7 @@ function App() {
   }
   function fileItems(files: FileList | File[]) {
     return Array.from(files).map((file) => ({
-      id: crypto.randomUUID(), name: file.name, file, status: "waiting" as const,
+      id: randomId(), name: file.name, file, status: "waiting" as const,
     }));
   }
   async function quickGenerate() {
@@ -609,14 +611,10 @@ function App() {
   const generationRunning =
     generationJob?.status === "queued" || generationJob?.status === "running";
   const pageTitle = nav.find((n) => n[0] === page)![1];
-  const selectedSourceLocationCount = data.materials
-    .filter((material) =>
-      selectedMaterialIds === null || selectedMaterialIds.includes(material.id),
-    )
-    .reduce(
-      (sum, material) => sum + (material.chunking?.generation_location_count || 0),
-      0,
-    );
+  const selectedSources = data.materials.filter((material) =>
+    selectedMaterialIds === null || selectedMaterialIds.includes(material.id),
+  );
+  const validQuickCount = Number.isInteger(quickCount) && quickCount >= 1 && quickCount <= 1000;
   return (
     <div className="app">
       <aside className="sidebar">
@@ -640,11 +638,13 @@ function App() {
           {nav.map(([key, label, Icon]) => (
             <button
               key={key}
+              aria-label={label}
               className={page === key ? "nav-item selected" : "nav-item"}
               onClick={() => go(key)}
             >
               <Icon size={19} />
-              {label}
+              <span className="nav-full-label">{label}</span>
+              <span className="nav-mobile-label">{({ home: "ホーム", practice: "演習", bank: "問題", materials: "資料", analytics: "記録", recipes: "設定" })[key]}</span>
               {key === "bank" && (
                 <span className="nav-count">{active.length}</span>
               )}
@@ -700,64 +700,20 @@ function App() {
               </button>
             </div>
           )}
-          {generationJob && (
-            <section className="panel generation-job" aria-live="polite">
-              <div className="generation-job-copy">
-                <span className={"import-status " + generationJob.status}>
-                  {generationJob.status === "queued"
-                    ? "待機中"
-                    : generationJob.status === "running"
-                      ? "生成中"
-                      : generationJob.status === "complete"
-                        ? "完了"
-                        : "中断・失敗"}
-                </span>
-                <h3>
-                  {generationJob.status === "complete"
-                    ? "問題の生成が完了しました"
-                    : generationJob.status === "failed"
-                      ? "問題生成を完了できませんでした"
-                      : "問題を生成しています"}
-                </h3>
-                <p>
-                  {generationJob.completed} / {generationJob.total}{" "}
-                  {generationJob.kind === "direct" ? "問" : "セット"}
-                  {generationJob.error && <><br />{generationJob.error}</>}
-                  {generationRunning && <><br />画面を移動しても生成は続きます。完了後にここから問題確認・演習へ進めます。</>}
-                </p>
-                {generationRunning && (
-                  <div className="progress-track">
-                    <i style={{ width: `${Math.round((generationJob.completed / Math.max(1, generationJob.total)) * 100)}%` }} />
-                  </div>
-                )}
-              </div>
-              {!!generationJob.set_ids.length && (
-                <div className="generation-job-actions">
-                  <button
-                    className="button"
-                    onClick={() => {
-                      go("bank");
-                      setFocusQuestionSetIds(generationJob.set_ids);
-                      setSetFilterId(generationJob.set_ids.length === 1 ? generationJob.set_ids[0] : "job");
-                    }}
-                  >
-                    問題を確認
-                  </button>
-                  {data.questions.some((question) => generationJob.set_ids.includes(question.question_set_id)) && (
-                    <button
-                      className="button primary"
-                      onClick={() => start(
-                        data.questions.filter((question) => generationJob.set_ids.includes(question.question_set_id)),
-                        "生成した問題の演習",
-                      )}
-                    >
-                      生成した問題を演習
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
+          {generationJob && <GenerationStatus
+            job={generationJob}
+            canPractice={data.questions.some((question) => generationJob.set_ids.includes(question.question_set_id))}
+            onDismiss={() => setGenerationJob(undefined)}
+            onReview={() => {
+              go("bank");
+              setFocusQuestionSetIds(generationJob.set_ids);
+              setSetFilterId(generationJob.set_ids.length === 1 ? generationJob.set_ids[0] : "job");
+            }}
+            onPractice={() => start(
+              data.questions.filter((question) => generationJob.set_ids.includes(question.question_set_id)),
+              "生成した問題の演習",
+            )}
+          />}
           {!ready ? (
             <div className="empty">学習データを読み込んでいます…</div>
           ) : (
@@ -1509,7 +1465,8 @@ function App() {
                     title="今年の資料を、学びの土台に。"
                     description="問題の内容・正解・解説の根拠となる資料を登録します。"
                   />
-                  <div className="workflow-step">1. 資料を追加</div>
+                  <details className="materials-import" open={!data.materials.length}>
+                    <summary>1. 資料を追加する <span>ファイル・URL</span></summary>
                   <label
                     className={"upload-zone " + (busy ? "disabled" : "")}
                     onDragOver={(e) => e.preventDefault()}
@@ -1550,7 +1507,7 @@ function App() {
                     if (!value) return;
                     setUrlInput("");
                     perform(() => runImports([{
-                      id: crypto.randomUUID(), name: value, url: value, status: "waiting",
+                      id: randomId(), name: value, url: value, status: "waiting",
                     }]));
                   }}>
                     <input
@@ -1578,6 +1535,7 @@ function App() {
                       <span className="muted upload-method-help">文字化けしたPDF向け。OpenAI接続とAPI利用料が必要です。</span>
                     </Field>
                   </details>
+                  </details>
                   {!!imports.length && <div className="import-list" aria-live="polite">
                     {imports.map((item) => <div className="import-item" key={item.id}>
                       <span className="import-name">{item.name}</span>
@@ -1590,6 +1548,70 @@ function App() {
                       </>}
                     </div>)}
                   </div>}
+                  <section className="panel quick-generate">
+                    <div className="workflow-step">2. 問題を作成</div>
+                    <h3>使う資料と、学び方を選ぶ</h3>
+                    <p>重要な知識を問う問題を作成し、内容と根拠を確認して保存します。</p>
+                    {!!data.materials.length ? <fieldset className="source-picker">
+                      <legend>使う資料 · {selectedSources.length}件を選択</legend>
+                      <div className="source-picker-actions">
+                        <button className="text-button" disabled={busy || generationRunning} onClick={() => setSelectedMaterialIds(null)}>すべて選択</button>
+                        <button className="text-button" disabled={busy || generationRunning} onClick={() => setSelectedMaterialIds([])}>選択を解除</button>
+                      </div>
+                      <div className="source-options">
+                        {data.materials.map((material) => {
+                          const chosen = selectedMaterialIds === null || selectedMaterialIds.includes(material.id);
+                          return <label className={`source-option ${chosen ? "chosen" : ""}`} key={material.id}>
+                            <input type="checkbox" checked={chosen} disabled={busy || generationRunning}
+                              onChange={(e) => {
+                                const current = selectedMaterialIds ?? data.materials.map((item) => item.id);
+                                setSelectedMaterialIds(e.target.checked ? [...current, material.id] : current.filter((id) => id !== material.id));
+                              }} />
+                            <span><strong>{material.name}</strong></span>
+                          </label>;
+                        })}
+                      </div>
+                    </fieldset> : <p className="empty subtle">上の「ファイルを選択」から資料を追加してください。</p>}
+                    <fieldset className="question-format-picker">
+                      <legend>問題形式</legend>
+                      <div className="format-options">
+                        {([
+                          ["choice", "選択問題", "選択肢から答えを選ぶ"],
+                          ["blank", "穴埋め", "文章の空欄を埋める"],
+                          ["word", "単語", "用語や数値を答える"],
+                          ["short", "短文記述", "理由や手順を説明する"],
+                        ] as const).map(([key, label, hint]) => <label key={key} className={`format-option ${quickType === key ? "chosen" : ""}`}>
+                          <input type="radio" name="question-format" value={key} checked={quickType === key} disabled={busy || generationRunning} onChange={() => setQuickType(key)} />
+                          <span><strong>{label}</strong><small>{hint}</small></span>
+                        </label>)}
+                      </div>
+                    </fieldset>
+                    <div className="quick-controls">
+                      <div className="field">
+                        <label htmlFor="quick-count">目標の問数</label>
+                        <div className="count-presets">
+                          {[5, 10, 20].map((n) => <button className={quickCount === n ? "chosen" : ""} key={n} disabled={busy || generationRunning} aria-pressed={quickCount === n} onClick={() => setQuickCount(n)}>{n}問</button>)}
+                        </div>
+                        <input id="quick-count" aria-label="目標の問数" aria-invalid={!validQuickCount} type="number" min={1} max={1000} value={quickCount || ""} disabled={busy || generationRunning} onChange={(e) => setQuickCount(Number(e.target.value))} />
+                        {!validQuickCount && <small className="field-error">1〜1,000問で指定してください。</small>}
+                      </div>
+                      <div className="field">
+                        <label htmlFor="quick-difficulty">難易度</label>
+                        <select id="quick-difficulty" aria-describedby="quick-difficulty-help" value={quickDifficulty} disabled={busy || generationRunning} onChange={(e) => setQuickDifficulty(e.target.value)}>
+                          {["基礎", "標準", "応用"].map((level) => <option key={level}>{level}</option>)}
+                        </select>
+                        <small id="quick-difficulty-help" className="field-hint">最初は「標準」がおすすめです。</small>
+                      </div>
+                    </div>
+                    <div className="quality-note"><Check size={18} /><p>学習に役立つ内容を優先します。適した題材が足りない場合は、目標より少ない問数で終了します。</p></div>
+                    {data.provider === "mock" && <p className="quick-mode-note">現在は簡易生成です。AIによる内容の審査は行えないため、作成後に根拠を確認してください。</p>}
+                    <div className="generation-submit">
+                      <p>{selectedSources.length ? `資料${selectedSources.length}件から、${typeNames[quickType]}を最大${validQuickCount ? quickCount : "—"}問` : "使う資料を1件以上選択してください。"}<small>作成中も画面を移動できます。AIの利用料は問数に応じて増えます。</small></p>
+                      <button className="button primary" disabled={busy || generationRunning || !selectedSources.length || !validQuickCount} onClick={() => perform(quickGenerate)}>
+                        <Sparkles size={16} /> {generationRunning ? "問題を作成中…" : busy ? "処理中…" : "この内容で問題を作成"}
+                      </button>
+                    </div>
+                  </section>
                   <div className="section-heading document-heading">
                     <h3>登録した資料</h3>
                     <span className="muted">{data.materials.length} 件</span>
@@ -1613,7 +1635,7 @@ function App() {
                         </span>
                         <h3>{d.name}</h3>
                         <p>
-                          {d.chunks.length} チャンク · バージョン {d.version}
+                          {d.chunks.length} 範囲を読み込み済み
                           {d.chunking?.auto_split && " · 長文を自動分割済み"}
                         </p>
                         <div>
@@ -1624,7 +1646,7 @@ function App() {
                           ))}
                         </div>
                         <span className="text-button">
-                          解析結果を確認・編集 <ArrowRight size={15} />
+                          資料の内容を確認 <ArrowRight size={15} />
                         </span>
                       </button>
                     ))}
@@ -1634,50 +1656,7 @@ function App() {
                       まだ資料はありません。最初のファイルを登録しましょう。
                     </div>
                   )}
-                  <section className="panel quick-generate">
-                      <div className="workflow-step">2. 形式を選んで問題を作成</div>
-                      <h3>読み込んだ資料から問題を作る</h3>
-                      <p>登録済みの資料から新しい問題を作ります。再アップロードせず、使う資料・形式・問数・難易度を指定できます。</p>
-                      {!!data.materials.length && <fieldset className="source-picker">
-                        <legend>使う資料</legend>
-                        {data.materials.map((material) => {
-                          const chosen = selectedMaterialIds === null || selectedMaterialIds.includes(material.id);
-                          return <label className="source-option" key={material.id}>
-                            <input type="checkbox" checked={chosen} disabled={busy}
-                              onChange={(e) => {
-                                const current = selectedMaterialIds ?? data.materials.map((item) => item.id);
-                                setSelectedMaterialIds(e.target.checked
-                                  ? [...current, material.id]
-                                  : current.filter((id) => id !== material.id));
-                              }} />
-                            <span><strong>{material.name}</strong><small>{material.chunks.length} 範囲を読み込み済み</small></span>
-                          </label>;
-                        })}
-                      </fieldset>}
-                      <div className="quick-controls">
-                        <Field label="問題形式">
-                          <select value={quickType} disabled={busy} onChange={(e) => setQuickType(e.target.value as Question["question_type"])}>
-                            {Object.entries(typeNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
-                          </select>
-                        </Field>
-                        <Field label="問数">
-                          <input type="number" min={1} max={1000} value={quickCount} disabled={busy} onChange={(e) => setQuickCount(Number(e.target.value))} />
-                        </Field>
-                        <Field label="難易度">
-                          <select value={quickDifficulty} disabled={busy} onChange={(e) => setQuickDifficulty(e.target.value)}>
-                            {["基礎", "標準", "応用"].map((level) => <option key={level}>{level}</option>)}
-                          </select>
-                        </Field>
-                      </div>
-                      {selectedSourceLocationCount > 0 && <p className="quick-mode-note">
-                        読み込んだ資料には約{selectedSourceLocationCount.toLocaleString()}個のページ・行範囲があります。未使用範囲を優先し、足りない場合は既使用範囲も別の問題に再利用します。既存問題はNGリストとして生成時に渡します。
-                      </p>}
-                      <p className="quick-mode-note">最大1,000問をバックグラウンドで作成します。画面を移動したり再読み込みしたりしても生成は続き、完了後に問題確認・演習へ移れます。問数に応じてAI利用料が増えます。</p>
-                      {data.provider === "mock" && <p className="quick-mode-note">現在は資料の抜粋を使う簡易生成です。OpenAI接続時は指定形式・難易度に沿った問題を生成します。</p>}
-                      <button className="button primary" disabled={busy || generationRunning || !data.materials.length} onClick={() => perform(quickGenerate)}>
-                        <Sparkles size={16} /> {generationRunning ? "生成中…" : busy ? "処理中…" : "問題を作成"}
-                      </button>
-                  </section>
+
                 </>
               )}
               {page === "recipes" && (

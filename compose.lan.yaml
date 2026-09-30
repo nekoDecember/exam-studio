@@ -1,0 +1,5 @@
+# Place after compose.public.yaml to keep public/monitoring networks AND add LAN.
+services:
+  app:
+    ports: !override
+      - "${LAN_BIND_IP:-0.0.0.0}:${LAN_PORT:-8080}:8000"

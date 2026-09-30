@@ -1,0 +1,138 @@
+[
+  {
+    "id": "unsupported",
+    "acceptable": false,
+    "question": {
+      "body": "当社の売上が増えた主な理由は何ですか。",
+      "answer": "海外事業の拡大",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "売上増加の理由は海外事業の拡大です。"
+    },
+    "evidence": [
+      {
+        "text": "当社の売上は前期比10%増えました。増加理由はこの資料では説明していません。"
+      }
+    ]
+  },
+  {
+    "id": "arbitrary-cloze",
+    "acceptable": false,
+    "question": {
+      "body": "安全点検を実施する。（　）、記録を保存する。空欄の接続詞を答えてください。",
+      "answer": "そして",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "原文の接続詞はそしてです。"
+    },
+    "evidence": [
+      {
+        "text": "安全点検を実施する。そして、記録を保存する。"
+      }
+    ]
+  },
+  {
+    "id": "ambiguous",
+    "acceptable": false,
+    "question": {
+      "body": "目標の割合は何%ですか。",
+      "answer": "30",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "海外売上構成比の目標は30%です。"
+    },
+    "evidence": [
+      {
+        "text": "海外売上構成比の目標は30%、再生可能エネルギー使用比率の目標は50%としています。"
+      }
+    ]
+  },
+  {
+    "id": "low-value",
+    "acceptable": false,
+    "question": {
+      "body": "挨拶文の最後に付いている句読点は何ですか。",
+      "answer": "句点",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "挨拶文の最後は句点です。"
+    },
+    "evidence": [
+      {
+        "text": "皆様のご支援に感謝いたします。これからも経営の健全性を高めていきます。"
+      }
+    ]
+  },
+  {
+    "id": "target-value",
+    "acceptable": true,
+    "question": {
+      "body": "2030年度の海外売上構成比目標は何%ですか。単位は不要です。",
+      "answer": "30",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "2030年度の海外売上構成比目標は30%です。"
+    },
+    "evidence": [
+      {
+        "text": "2030年度の海外売上構成比目標は30%です。"
+      }
+    ]
+  },
+  {
+    "id": "required-form",
+    "acceptable": true,
+    "question": {
+      "body": "経費精算で提出が必要な書類名は何ですか。",
+      "answer": "領収書",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "必要な提出書類は領収書です。"
+    },
+    "evidence": [
+      {
+        "text": "経費精算では領収書の提出が必要です。"
+      }
+    ]
+  },
+  {
+    "id": "reading-scale",
+    "acceptable": true,
+    "question": {
+      "body": "グラフ読解において、縦軸の目盛り間隔は何百万円ですか。単位は不要です。",
+      "answer": "10",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "売上を読み取るため、縦軸の目盛り間隔10百万円を使用します。"
+    },
+    "evidence": [
+      {
+        "text": "グラフの読み方：縦軸は売上高を示し、目盛り間隔は10百万円です。"
+      }
+    ]
+  },
+  {
+    "id": "cause",
+    "acceptable": true,
+    "question": {
+      "body": "今期の利益増加の主な要因は何ですか。",
+      "answer": "原材料費の低下",
+      "question_type": "word",
+      "choices": [],
+      "accepted_answers": [],
+      "explanation": "資料は原材料費の低下を利益増加の要因と説明しています。"
+    },
+    "evidence": [
+      {
+        "text": "今期の利益増加は原材料費の低下によるものです。"
+      }
+    ]
+  }
+]

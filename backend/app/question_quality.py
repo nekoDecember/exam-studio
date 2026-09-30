@@ -3,6 +3,103 @@
 import re
 import unicodedata
 
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, model_validator
+
+QUALITY_VERSION = "2026-10-01.v1"
+ReasonCode = Literal[
+    "document_metadata",
+    "visual_trivia",
+    "low_learning_value",
+    "unsupported_answer",
+    "ambiguous_target",
+    "arbitrary_cloze",
+    "answer_leak",
+]
+
+
+class QualityReason(BaseModel):
+    code: ReasonCode
+    message: str
+
+
+class QualityChecks(BaseModel):
+    model_config = ConfigDict(strict=True)
+    learning_value: bool
+    grounded: bool
+    clear: bool
+
+
+class QualityReview(BaseModel):
+    model_config = ConfigDict(strict=True)
+    acceptable: bool
+    checks: QualityChecks
+    reasons: list[QualityReason]
+    warnings: list[str]
+
+    @model_validator(mode="after")
+    def consistent_decision(self):
+        passed = all(self.checks.model_dump().values())
+        if self.acceptable != passed or (self.acceptable and self.reasons):
+            raise ValueError("品質審査の判定が整合していません")
+        if not self.acceptable and not self.reasons:
+            raise ValueError("品質棄却には理由が必要です")
+        if any(not reason.message.strip() for reason in self.reasons):
+            raise ValueError("品質棄却の説明が空です")
+        return self
+
+
+def quality_review(reasons=(), warnings=()):
+    """Build a deterministic result for local rules and the demo provider."""
+    codes = {reason["code"] for reason in reasons}
+    return QualityReview(
+        acceptable=not reasons,
+        checks=QualityChecks(
+            learning_value=not codes.intersection(
+                {
+                    "document_metadata",
+                    "visual_trivia",
+                    "low_learning_value",
+                    "arbitrary_cloze",
+                }
+            ),
+            grounded="unsupported_answer" not in codes,
+            clear=not codes.intersection({"ambiguous_target", "answer_leak"}),
+        ),
+        reasons=[QualityReason(**reason) for reason in reasons],
+        warnings=list(warnings),
+    ).model_dump()
+
+
+def obvious_trivia_reason(question, evidence=()):
+    """Reject explicit presentation trivia, leaving contextual cases to review."""
+    body = _compact(question.get("body"))
+    normalized = unicodedata.normalize(
+        "NFKC", str(question.get("body") or "")
+    ).casefold()
+    if reason := metadata_trivia_reason(question):
+        return {"code": "document_metadata", "message": reason}
+    evidence_text = " ".join(str(item.get("text") or "") for item in evidence)
+    # In a graph-reading lesson, labels and scales can themselves be the topic.
+    graph_lesson = re.search(
+        r"グラフ(?:の)?(?:読み方|読解|作成方法)|軸の意味|目盛りの(?:意味|読み方)",
+        evidence_text,
+    )
+    visual_count = re.search(
+        r"(?:目盛り?|メモリ|メモリー|格子線|グリッド線).{0,16}(?:何本|何個|いくつ|本数|個数|数は)|"
+        r"(?:何本|何個|いくつ).{0,16}(?:目盛り?|メモリ|格子線)",
+        body,
+    ) or re.search(
+        r"\b(?:how many|number of)\b.{0,30}\b(?:ticks|tick marks|gridlines)\b",
+        normalized,
+    )
+    if visual_count and not graph_lesson:
+        return {
+            "code": "visual_trivia",
+            "message": "図表の目盛りや表示要素を数えるだけの問題です",
+        }
+    return None
+
 
 _EXPLANATORY_CUE = re.compile(
     r"とは.{1,}|を指す|を意味する|である|です|となる|になる|と定め|"
@@ -19,30 +116,6 @@ _NUMERIC_FACT = re.compile(
     re.IGNORECASE,
 )
 
-_QUESTION_METADATA_PATTERNS = (
-    re.compile(r"(?:何|どの|どれ)(?:ページ|頁|行|スライド|章番号|節番号)"),
-    re.compile(
-        r"(?:ページ|頁|行|スライド)(?:番号|数).{0,8}(?:は|が)?(?:何|どれ|いくつ)"
-    ),
-    re.compile(
-        r"(?:見出し|小見出し|表題|タイトル|題名|資料名|ファイル名|章名|節名)"
-        r".{0,10}(?:は|を|が)?(?:何|どれ|何と|なんと|呼ばれ|書かれ|記載)"
-    ),
-    re.compile(
-        r"(?:何|どの|どれ).{0,8}(?:見出し|小見出し|表題|タイトル|題名|章名|節名)"
-    ),
-    re.compile(r"(?:どこ|何行|どの行).{0,8}(?:記載|書かれ|載って)"),
-)
-_ENGLISH_METADATA_PATTERNS = (
-    re.compile(r"\b(?:what|which)\s+(?:page|line|slide|heading|title|section)\b"),
-    re.compile(r"\b(?:number|count)\s+of\s+(?:pages|lines|slides)\b"),
-    re.compile(r"\bwhat\s+is\s+(?:the\s+)?(?:page|line|slide)\s+(?:number|count)\b"),
-    re.compile(r"\b(?:heading|title)\b.{0,24}\b(?:page|slide|document|file)\b"),
-    re.compile(r"\b(?:page|line|slide)\b.{0,24}\b(?:heading|title)\b"),
-    re.compile(r"\bwhat\s+is\s+(?:the\s+)?(?:heading|title|file\s+name)\b"),
-)
-
-
 def _compact(value):
     text = unicodedata.normalize("NFKC", str(value or "")).casefold()
     return re.sub(r"\s+", "", text)
@@ -50,27 +123,46 @@ def _compact(value):
 
 def metadata_trivia_reason(question):
     """Return a reason when the prompt asks about document layout or location."""
-    normalized = unicodedata.normalize("NFKC", str(question.get("body") or "")).casefold()
+    normalized = unicodedata.normalize(
+        "NFKC", str(question.get("body") or "")
+    ).casefold()
     body = _compact(normalized)
     if not body:
         return "問題文が空です"
-    if any(pattern.search(body) for pattern in _QUESTION_METADATA_PATTERNS) or any(
-        pattern.search(normalized) for pattern in _ENGLISH_METADATA_PATTERNS
-    ):
-        return "ページ・行・見出しなど資料の構造や場所だけを問う問題は出題しません"
-
-    has_location = re.search(r"(?:ページ|頁|行番号|スライド番号)", body) or re.search(
-        r"\b(?:page|line|slide)\b", normalized
-    )
-    has_document_label = re.search(
-        r"(?:見出し|小見出し|表題|タイトル|題名|資料名|ファイル名|章名|節名)",
+    # Only explicit identification/location questions are fast-rejected.
+    # A required form name, or a title mentioned as context, is meaningful.
+    operational = re.search(r"提出|申請|添付|必要な書類|必要書類|保存する書類", body)
+    asks_label = re.search(
+        r"(?:資料名|ファイル名|書類名|文書名|タイトル|題名|表題|見出し|章名|節名)"
+        r"(?:は|を|が|として|に).{0,12}(?:何|どれ|答え|選ん|記載|書かれ)",
         body,
-    ) or re.search(r"\b(?:heading|title|file name)\b", normalized)
-    has_document_context = re.search(r"(?:資料|文書|このページ|このスライド)", body) or re.search(
-        r"\b(?:document|file)\b", normalized
     )
-    if has_document_label and (has_location or has_document_context):
-        return "資料のページ・見出し・タイトルを特定するだけの問題は出題しません"
+    document_identity = re.search(
+        r"(?:この|本|入力した|登録した|提示された|アップロードした)(?:資料|文書|書類|報告書)",
+        body,
+    )
+    location_only = re.search(
+        r"(?:何ページ|何頁|何行|どのページ|どの行|どのスライド)|"
+        r"(?:ページ数|ページ番号|行番号|スライド番号).{0,8}(?:何|いくつ|答え|選ん)|"
+        r"(?:どこ|何行|どの行).{0,8}(?:記載|書かれ|載って)",
+        body,
+    )
+    english_identity = re.search(
+        r"\b(?:what|which)\b.{0,25}\b(?:title|file name|document name)\b",
+        normalized,
+    )
+    if location_only or (
+        not operational
+        and (
+            asks_label
+            or english_identity
+            or (
+                document_identity
+                and re.search(r"(?:名前|名称).{0,10}(?:何|答え|選ん)", body)
+            )
+        )
+    ):
+        return "入力資料の名前・見出し・記載場所だけを問う問題です"
     return ""
 
 

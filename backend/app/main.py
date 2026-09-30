@@ -13,7 +13,15 @@ from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
@@ -28,9 +36,16 @@ from .dedupe import (
     unused_source_locations,
 )
 from .models import BulkQuestionDeletion, Generation, Grade, Question, Recipe
+from .generation_quality import GenerationBudget, CHANGE_SOURCE_CODES
 from .parser import ALLOWED, MAX_CHUNK_CHARS, parse, split_chunks
 from .providers import PROMPT_VERSION, OpenAIAPIError, provider
-from .question_quality import has_substantive_source_text
+from .question_quality import (
+    has_substantive_source_text,
+    obvious_trivia_reason,
+    quality_review,
+    QualityReview,
+    QUALITY_VERSION,
+)
 from .seed import seed
 
 
@@ -40,7 +55,9 @@ async def lifespan(app):
     seed()
     purged_questions = db.purge_deleted_questions()
     if purged_questions:
-        logger.info("Permanently removed %s previously deleted questions", purged_questions)
+        logger.info(
+            "Permanently removed %s previously deleted questions", purged_questions
+        )
     for job in db.all_items("generation_jobs"):
         if job.get("status") in ("queued", "running"):
             db.put(
@@ -84,29 +101,56 @@ def checked_public_url(url):
         port = parsed.port
     except ValueError as e:
         raise HTTPException(422, "URLのポートが不正です") from e
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or port not in (None, 80, 443):
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or port not in (None, 80, 443)
+    ):
         raise HTTPException(422, "公開WebページのHTTP/HTTPS URLを指定してください")
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
     except socket.gaierror as e:
         raise HTTPException(422, "URLのホスト名を解決できません") from e
-    if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+    if not addresses or any(
+        not ipaddress.ip_address(item[4][0]).is_global for item in addresses
+    ):
         raise HTTPException(422, "ローカル・非公開アドレスのURLは登録できません")
-    chosen = next((item for item in addresses if item[0] == socket.AF_INET), addresses[0])
+    chosen = next(
+        (item for item in addresses if item[0] == socket.AF_INET), addresses[0]
+    )
     return parsed, chosen[4][0]
 
 
 def download_public_url(url, destination):
     current = url
-    with httpx.Client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(
+        timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False, trust_env=False
+    ) as client:
         for _ in range(5):
             parsed, address = checked_public_url(current)
             host = parsed.hostname.encode("idna").decode("ascii")
             host_header = host + (f":{parsed.port}" if parsed.port else "")
             address = f"[{address}]" if ":" in address else address
-            pinned_url = parsed._replace(netloc=address + (f":{parsed.port}" if parsed.port else ""), fragment="").geturl()
+            pinned_url = parsed._replace(
+                netloc=address + (f":{parsed.port}" if parsed.port else ""), fragment=""
+            ).geturl()
             try:
-                with client.stream("GET", pinned_url, headers={"Host": host_header, "User-Agent": "ExamStudio/1.0", "Accept": "text/html,application/pdf,application/vnd.openxmlformats-officedocument.*,text/plain,*/*"}, extensions={"sni_hostname": host}) as response:
+                with client.stream(
+                    "GET",
+                    pinned_url,
+                    headers={
+                        "Host": host_header,
+                        "User-Agent": "ExamStudio/1.0",
+                        "Accept": "text/html,application/pdf,application/vnd.openxmlformats-officedocument.*,text/plain,*/*",
+                    },
+                    extensions={"sni_hostname": host},
+                ) as response:
                     if response.status_code in (301, 302, 303, 307, 308):
                         target = response.headers.get("location")
                         if not target:
@@ -114,18 +158,26 @@ def download_public_url(url, destination):
                         current = urljoin(current, target)
                         continue
                     response.raise_for_status()
-                    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                    content_type = (
+                        response.headers.get("content-type", "")
+                        .split(";", 1)[0]
+                        .lower()
+                    )
                     suffix = Path(urlsplit(current).path).suffix.lower()
                     mime_suffix = {
-                        "text/html": ".html", "application/xhtml+xml": ".html",
-                        "text/plain": ".txt", "application/pdf": ".pdf",
+                        "text/html": ".html",
+                        "application/xhtml+xml": ".html",
+                        "text/plain": ".txt",
+                        "application/pdf": ".pdf",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
                         "application/vnd.ms-excel": ".xls",
                         "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
                         "application/vnd.ms-powerpoint": ".ppt",
                     }.get(content_type)
                     if suffix not in ALLOWED:
-                        suffix = mime_suffix or (".html" if content_type.startswith("text/html") else "")
+                        suffix = mime_suffix or (
+                            ".html" if content_type.startswith("text/html") else ""
+                        )
                     if suffix not in ALLOWED:
                         raise HTTPException(415, "URLの内容は対応形式ではありません")
                     total = 0
@@ -133,14 +185,20 @@ def download_public_url(url, destination):
                         for block in response.iter_bytes(1024 * 1024):
                             total += len(block)
                             if total > MAX_UPLOAD_BYTES:
-                                raise HTTPException(413, "URLの資料は100MB以内にしてください")
+                                raise HTTPException(
+                                    413, "URLの資料は100MB以内にしてください"
+                                )
                             out.write(block)
                     if not total:
                         raise HTTPException(422, "URLの内容が空です")
-                    name = Path(urlsplit(current).path).name or urlsplit(current).hostname
+                    name = (
+                        Path(urlsplit(current).path).name or urlsplit(current).hostname
+                    )
                     return name + suffix if not Path(name).suffix else name, suffix
             except httpx.HTTPError as e:
-                raise HTTPException(422, "URLを取得できませんでした。公開設定とURLを確認してください") from e
+                raise HTTPException(
+                    422, "URLを取得できませんでした。公開設定とURLを確認してください"
+                ) from e
     raise HTTPException(422, "URLの転送が多すぎます")
 
 
@@ -313,7 +371,10 @@ def normalize_legacy_source_segments(chunks):
         if index in skipped:
             continue
         result.append(chunk)
-        if not any(chunk.get(key) for key in ("page_number", "slide_number", "sheet_name", "cell_range")):
+        if not any(
+            chunk.get(key)
+            for key in ("page_number", "slide_number", "sheet_name", "cell_range")
+        ):
             start = chunk.get("line_start")
             end = chunk.get("line_end")
             if start is not None and end is not None:
@@ -325,10 +386,21 @@ def material_chunks_with_locations(material, chunks):
     source_chunks = []
     next_line = 1
     is_extracted_line_source = str(material.get("file_type") or "").lower() in {
-        ".html", ".htm", ".pptx", ".ppt", ".png", ".jpg", ".jpeg", ".webp"
+        ".html",
+        ".htm",
+        ".pptx",
+        ".ppt",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
     }
     for original in normalize_legacy_source_segments(chunks):
-        original = normalize_spreadsheet_chunk(original) if original.get("sheet_name") else original
+        original = (
+            normalize_spreadsheet_chunk(original)
+            if original.get("sheet_name")
+            else original
+        )
         chunk = {
             **original,
             "material_id": material.get("id", ""),
@@ -337,14 +409,22 @@ def material_chunks_with_locations(material, chunks):
             "line_basis": "extracted"
             if is_extracted_line_source or original.get("ocr_confidence") is not None
             else "document",
-            **({"source_url": material["source_url"]} if material.get("source_url") else {}),
+            **(
+                {"source_url": material["source_url"]}
+                if material.get("source_url")
+                else {}
+            ),
         }
         if chunk.get("line_start") is None:
             cell_range = str(chunk.get("cell_range") or "")
             match = re.search(r"[A-Z]+(\d+)", cell_range)
             if match:
                 chunk["line_start"] = int(match.group(1))
-            elif chunk.get("page_number") or chunk.get("slide_number") or chunk.get("sheet_name"):
+            elif (
+                chunk.get("page_number")
+                or chunk.get("slide_number")
+                or chunk.get("sheet_name")
+            ):
                 chunk["line_start"] = 1
             else:
                 chunk["line_start"] = next_line
@@ -352,7 +432,10 @@ def material_chunks_with_locations(material, chunks):
             chunk["line_end"] = chunk["line_start"] + max(
                 0, len(str(chunk.get("text", "")).splitlines()) - 1
             )
-        if not any(chunk.get(key) for key in ("page_number", "slide_number", "sheet_name", "cell_range")):
+        if not any(
+            chunk.get(key)
+            for key in ("page_number", "slide_number", "sheet_name", "cell_range")
+        ):
             next_line = max(next_line, int(chunk["line_end"]) + 1)
         source_chunks.append(chunk)
     return source_chunks
@@ -397,13 +480,18 @@ def bootstrap():
         }
         return {
             **item,
-            "chunks": [{k: value for k, value in chunk.items() if k != "text"} for chunk in chunks],
+            "chunks": [
+                {k: value for k, value in chunk.items() if k != "text"}
+                for chunk in chunks
+            ],
             "chunking": chunking,
         }
 
     return {
         **{
-            k: [summary(item) for item in db.all_items(k)] if k == "materials" else db.all_items(k)
+            k: [summary(item) for item in db.all_items(k)]
+            if k == "materials"
+            else db.all_items(k)
             for k in [
                 "questions",
                 "materials",
@@ -489,7 +577,8 @@ def upload(
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(
-            415, "PDF / Excel / PowerPoint / HTML / PNG / JPEG / WebP / UTF-8 TXT に対応しています"
+            415,
+            "PDF / Excel / PowerPoint / HTML / PNG / JPEG / WebP / UTF-8 TXT に対応しています",
         )
     if analysis_method == "multimodal" and suffix != ".pdf":
         raise HTTPException(422, "LLMマルチモーダル解析はPDFで利用してください")
@@ -544,7 +633,9 @@ def upload(
         for c in chunks:
             c["categories"] = categories
         if len(classification_batches) < len(analysis_batches):
-            warnings.append("長い資料のカテゴリは一部の範囲から推定しました。必要に応じて修正してください。")
+            warnings.append(
+                "長い資料のカテゴリは一部の範囲から推定しました。必要に応じて修正してください。"
+            )
     except HTTPException:
         categories = ["未分類"]
         for c in chunks:
@@ -599,9 +690,7 @@ def update_document(kind: str, id: str, data: dict):
         raise HTTPException(404)
     old = require(kind, id)
     changes = {
-        k: v
-        for k, v in data.items()
-        if k in ("name", "categories", "chunks", "status")
+        k: v for k, v in data.items() if k in ("name", "categories", "chunks", "status")
     }
     chunks = changes.get("chunks", old["chunks"])
     if not isinstance(chunks, list) or any(
@@ -616,16 +705,17 @@ def update_document(kind: str, id: str, data: dict):
         raise HTTPException(422, "カテゴリは配列で指定してください")
     submitted_chunk_count = len(chunks)
     chunks = split_chunks(
-        [normalize_spreadsheet_chunk(chunk) if chunk.get("sheet_name") else chunk for chunk in chunks]
+        [
+            normalize_spreadsheet_chunk(chunk) if chunk.get("sheet_name") else chunk
+            for chunk in chunks
+        ]
     )
     changes["chunks"] = chunks
     chunking = {
         **old.get("chunking", {}),
         "max_chars": MAX_CHUNK_CHARS,
         "chunk_count": len(chunks),
-        "analysis_batch_count": len(
-            chunk_batches(chunks, MAX_ANALYSIS_BATCH_CHARS)
-        ),
+        "analysis_batch_count": len(chunk_batches(chunks, MAX_ANALYSIS_BATCH_CHARS)),
         "auto_split": old.get("chunking", {}).get("auto_split", False)
         or len(chunks) > submitted_chunk_count,
     }
@@ -646,8 +736,7 @@ def delete_document(kind: str, id: str):
     file_path = item.get("file_path")
     if isinstance(file_path, str) and file_path and Path(file_path).name == file_path:
         shared = any(
-            other.get("file_path") == file_path
-            for other in db.all_items("materials")
+            other.get("file_path") == file_path for other in db.all_items("materials")
         )
         upload_dir = (db.DATA / "uploads").resolve()
         source_path = (upload_dir / file_path).resolve()
@@ -699,7 +788,10 @@ def generation_sources(recipe, source_chunk_ids=None):
             for c in chunks
             if c["id"] in allowed_chunks
             or c.get("source_chunk_id") in allowed_chunks
-            or any(c["id"].startswith(f"{allowed_id}:lines:") for allowed_id in allowed_chunks)
+            or any(
+                c["id"].startswith(f"{allowed_id}:lines:")
+                for allowed_id in allowed_chunks
+            )
         ]
     if not chunks:
         raise HTTPException(
@@ -707,11 +799,6 @@ def generation_sources(recipe, source_chunk_ids=None):
             "選択した資料に対象カテゴリの範囲がありません。資料またはカテゴリを確認してください",
         )
     question_sources = question_source_locations(chunks)
-    if not question_sources:
-        raise HTTPException(
-            422,
-            "出題できる説明本文がありません。見出し・ページ番号・短いラベルだけでなく、規則・定義・条件などを含む資料範囲を選んでください。",
-        )
     return question_sources
 
 
@@ -755,13 +842,14 @@ def source_location_chunks(chunks):
             cell_match = re.fullmatch(r"([A-Z]+)\d+:([A-Z]+)\d+", cell_range)
             if cell_match:
                 candidate["cell_range"] = (
-                    f"{cell_match.group(1)}{line_start}:"
-                    f"{cell_match.group(2)}{line_end}"
+                    f"{cell_match.group(1)}{line_start}:{cell_match.group(2)}{line_end}"
                 )
             # Very long physical lines can cross parser segments. Keep only one
             # source unit for a page/line so two questions cannot cite fragments
             # of the same line as if they were distinct locations.
-            if any(source_locations_overlap(candidate, existing) for existing in result):
+            if any(
+                source_locations_overlap(candidate, existing) for existing in result
+            ):
                 continue
             result.append(candidate)
     return result
@@ -833,9 +921,7 @@ def _ng_question(question):
     }
 
 
-def questions_for_source_batch(
-    source_batch, questions, limit=12, extra_questions=()
-):
+def questions_for_source_batch(source_batch, questions, limit=12, extra_questions=()):
     source = {
         "source_references": [
             {
@@ -958,7 +1044,8 @@ def ensure_question_format(item, source_chunks):
             "",
         )
         body = (
-            source_sentence.replace(answer, "（　）", 1) + "　空欄に入る語句を答えてください。"
+            source_sentence.replace(answer, "（　）", 1)
+            + "　空欄に入る語句を答えてください。"
             if source_sentence
             else body + "\n空欄（　）に入る語句を答えてください。"
         )
@@ -998,18 +1085,146 @@ def generate(
     persist_recipe=False,
     source_question_offset=0,
     set_name_offset=0,
+    budget=None,
+    progress=None,
 ):
-    # Selection, model calls, duplicate checks, and the final DB commit form one
-    # critical section so concurrent tabs cannot spend tokens on the same range.
+    # Selection, AI calls and the commit remain serialized across tabs/devices.
     with GENERATION_LOCK:
         return _generate(
             recipe,
-            count=count,
-            source_chunk_ids=source_chunk_ids,
-            persist_recipe=persist_recipe,
-            source_question_offset=source_question_offset,
-            set_name_offset=set_name_offset,
+            count,
+            source_chunk_ids,
+            persist_recipe,
+            source_question_offset,
+            set_name_offset,
+            budget,
+            progress,
         )
+
+
+def prepare_candidate(item, recipe, source_unit, known_questions, parent):
+    """Resolve evidence and check structure before an independent review."""
+    if not isinstance(item, dict):
+        return None, [
+            {
+                "code": "invalid_format",
+                "message": "問題をJSONオブジェクトで返してください",
+            }
+        ]
+    item = prepare_numeric_answer(ensure_question_format(item, [source_unit]))
+    reported = item.get("source_references")
+    if (
+        not isinstance(reported, list)
+        or not reported
+        or any(
+            not isinstance(ref, dict)
+            or (ref.get("source_key") or ref.get("chunk_id")) != "SOURCE_1"
+            for ref in reported
+        )
+    ):
+        return None, [
+            {
+                "code": "invalid_reference",
+                "message": "根拠には入力のsource_key SOURCE_1を指定してください",
+            }
+        ]
+    reference = {
+        key: source_unit[key]
+        for key in (
+            "id",
+            "material_id",
+            "material_name",
+            "file_type",
+            "line_basis",
+            "text",
+            "page_number",
+            "line_start",
+            "line_end",
+            "char_start",
+            "char_end",
+            "slide_number",
+            "sheet_name",
+            "cell_range",
+            "source_url",
+        )
+        if key in source_unit
+    }
+    try:
+        question = Question(
+            **{
+                **item,
+                "id": db.uid(),
+                "parent": parent,
+                "category": recipe["category"],
+                "recipe_id": recipe["id"],
+                "score_weight": recipe["score_weight"],
+                "source_references": [reference],
+            }
+        ).model_dump()
+    except (ValidationError, TypeError):
+        return None, [
+            {
+                "code": "invalid_format",
+                "message": "必須項目と選択肢・正解の整合性を満たしてください",
+            }
+        ]
+    reasons = []
+    if question["question_type"] != recipe["question_type"]:
+        reasons.append(
+            {
+                "code": "invalid_format",
+                "message": f"question_typeは{recipe['question_type']}にしてください",
+            }
+        )
+    if (
+        question["question_type"] == "choice"
+        and len(question["choices"]) != recipe["choice_count"]
+    ):
+        reasons.append(
+            {
+                "code": "invalid_format",
+                "message": f"選択肢は{recipe['choice_count']}個にしてください",
+            }
+        )
+    if question["question_type"] == "blank":
+        blanks = re.findall(
+            r"（\s*）|\(\s*\)|_{2,}|＿{2,}|【\s*】|〔\s*〕", question["body"]
+        )
+        if (
+            len(blanks) != recipe["blank_count"]
+            or len(question["answer"].split(" / ")) != recipe["blank_count"]
+        ):
+            reasons.append(
+                {
+                    "code": "invalid_format",
+                    "message": f"空欄と解答は{recipe['blank_count']}個にしてください",
+                }
+            )
+    if any(
+        answer_appears_in_body(question["body"], answer)
+        for answer in [question["answer"], *question["accepted_answers"]]
+    ):
+        reasons.append(
+            {
+                "code": "answer_leak",
+                "message": "問題文に正答が含まれています。正答を示さずに問う問題にしてください",
+            }
+        )
+    if duplicate_question(question, known_questions):
+        reasons.append(
+            {
+                "code": "duplicate",
+                "message": "既存問題と問題文・正解が同じです。別の事実を問う問題にしてください",
+            }
+        )
+    return question, reasons
+
+
+def checked_quality_review(candidate):
+    # Validation also covers custom/test providers; missing fields never mean pass.
+    return QualityReview.model_validate(
+        provider().review_question(candidate)
+    ).model_dump()
 
 
 def _generate(
@@ -1019,239 +1234,122 @@ def _generate(
     persist_recipe=False,
     source_question_offset=0,
     set_name_offset=0,
+    budget=None,
+    progress=None,
 ):
+    target_per_set = recipe["major_count"] * recipe["sub_count"]
+    requested_count = target_per_set * count
+    budget = budget or GenerationBudget(requested_count)
+    attempted_before, rejected_before = budget.attempted_count, budget.rejected_count
     chunks = generation_sources(recipe, source_chunk_ids)
     source_batches = chunk_batches(chunks, MAX_GENERATION_BATCH_CHARS)
     existing_questions = db.all_items("questions")
-    material_ids = {str(chunk.get("material_id") or "") for chunk in chunks}
+    material_ids = set(
+        recipe.get("material_ids") or [chunk["material_id"] for chunk in chunks]
+    )
     source_history = [
-        {"source_references": locations}
-        for generation_set in db.all_items("sets")
-        if material_ids & {
-            str(material_id) for material_id in generation_set.get("material_ids", [])
-        }
-        and isinstance(
-            locations := generation_set.get("used_source_locations"), list
-        )
-        and locations
+        {"source_references": item["used_source_locations"]}
+        for item in db.all_items("sets")
+        if material_ids.intersection(item.get("material_ids", []))
+        and isinstance(item.get("used_source_locations"), list)
     ]
-    pending = []
-    sets = []
+    pending, sets = [], []
+    stop_reason = "target_reached"
     for n in range(count):
         set_id = db.uid()
-        question_count = recipe["major_count"] * recipe["sub_count"]
-        known_questions = [*existing_questions, *source_history, *pending]
-        selected_units = select_source_units(
-            source_batches,
-            known_questions,
-            question_count,
-            source_question_offset + n * question_count,
+        set_questions, used_chunks = [], {}
+        set_rejected_before = budget.rejected_count
+        source_pool = (
+            select_source_units(
+                source_batches,
+                [*existing_questions, *source_history, *pending],
+                len(chunks),
+                source_question_offset + n * target_per_set,
+            )
+            if chunks
+            else []
         )
-        generated = []
-        generated_candidates = []
-        for source_unit in selected_units:
-            known_questions = [*existing_questions, *pending]
-            source_for_model = [
-                {
-                    "id": "SOURCE_1",
-                    "source_key": "SOURCE_1",
-                    "text": str(source_unit.get("text") or ""),
-                }
+        while len(set_questions) < target_per_set:
+            available = [
+                unit for unit in source_pool if unit["id"] not in budget.blocked_sources
             ]
-            call_recipe = {
-                **recipe,
-                "major_count": 1,
-                "sub_count": 1,
-                "ng_questions": questions_for_source_batch(
-                    [source_unit],
-                    known_questions,
-                    extra_questions=generated_candidates,
-                ),
-            }
-            batch_result = ai_call(
-                provider().generate_question_set, call_recipe, source_for_model
-            )
-            if len(batch_result) != 1:
-                raise HTTPException(
-                    422, "生成問題数がレシピと一致しません。再生成してください"
-                )
-            generated.append((batch_result[0], [source_unit]))
-            generated_candidates.append(batch_result[0])
-        if len(generated) != question_count:
-            raise HTTPException(
-                422, "生成問題数がレシピと一致しません。再生成してください"
-            )
-        used_chunks = {c["id"]: c for c in selected_units}
-        scope_warning = ""
-        if len(used_chunks) < len(selected_units):
-            scope_warning = "問題数が資料範囲数を上回るため、一部の資料範囲を再利用しました。"
-        elif len(chunks) > len(used_chunks):
-            scope_warning = (
-                f"選択資料の全{len(chunks)}範囲中、"
-                f"{len(used_chunks)}範囲をこのセットで使用しました。"
-                "複数セットを生成すると対象範囲を分散します。"
-            )
-        for item_index, (item, item_chunks) in enumerate(generated):
-            rejected = []
-            q = None
+            if not available:
+                stop_reason = "candidate_exhausted"
+                break
+            if budget.exhausted:
+                stop_reason = "attempt_limit"
+                break
+            unit = available[0]
+            source_pool.remove(unit)
+            source_pool.append(unit)
+            feedback = []
+            accepted = False
             for attempt in range(MAX_DUPLICATE_RETRIES + 1):
-                if not isinstance(item, dict):
-                    rejected.append({"body": str(item)[:320]})
-                    if attempt >= MAX_DUPLICATE_RETRIES:
-                        raise HTTPException(
-                            422,
-                            "問題形式の候補を作れませんでした。生成条件を確認してください。",
-                        )
-                    item = regenerate_question_candidate(
-                        recipe,
-                        [*existing_questions, *pending],
-                        rejected,
-                        item_chunks[0],
-                        ["問題をJSONオブジェクトで返してください"],
-                    )
-                    continue
-                item = prepare_numeric_answer(
-                    ensure_question_format(item, item_chunks)
+                if budget.exhausted:
+                    break
+                budget.attempted_count += 1
+                if progress:
+                    progress("generating", len(pending))
+                item = regenerate_question_candidate(
+                    recipe,
+                    [*existing_questions, *pending],
+                    budget.rejected_questions,
+                    unit,
+                    feedback,
                 )
-                raw_warnings = item.get("warnings")
-                warnings = (
-                    [str(warning) for warning in raw_warnings if str(warning).strip()]
-                    if isinstance(raw_warnings, list)
-                    else []
+                question, reasons = prepare_candidate(
+                    item,
+                    recipe,
+                    unit,
+                    [*existing_questions, *pending],
+                    f"第{len(set_questions) // recipe['sub_count'] + 1}問",
                 )
-                if scope_warning:
-                    warnings.append(scope_warning)
-                source_unit = item_chunks[0]
-                source_references = item.get("source_references")
-                if not isinstance(source_references, list):
-                    source_references = []
-                reported_ids = {
-                    str(ref.get("source_key") or ref.get("chunk_id"))
-                    for ref in source_references
-                    if isinstance(ref, dict)
-                    and (ref.get("source_key") or ref.get("chunk_id"))
-                }
-                if "SOURCE_1" not in reported_ids:
-                    warnings.append(
-                        "生成結果に根拠IDがなかったため、入力した資料範囲を根拠に設定しました。"
-                    )
-                refs = [
+                review = None
+                if not reasons:
+                    evidence = [{"text": unit["text"]}]
+                    obvious = obvious_trivia_reason(question, evidence)
+                    if obvious:
+                        review = quality_review([obvious])
+                    else:
+                        if progress:
+                            progress("reviewing", len(pending))
+                        # Do not pass model-generated importance claims to the reviewer.
+                        review = ai_call(
+                            checked_quality_review,
+                            {
+                                "question": {
+                                    key: question[key]
+                                    for key in (
+                                        "body",
+                                        "question_type",
+                                        "choices",
+                                        "answer",
+                                        "accepted_answers",
+                                        "explanation",
+                                    )
+                                },
+                                "evidence": evidence,
+                                "context": {
+                                    "categories": unit.get("categories", []),
+                                    "material_name": unit.get("material_name", ""),
+                                },
+                            },
+                        )
+                    reasons = review["reasons"]
+                if reasons:
+                    budget.reject(item if isinstance(item, dict) else {}, reasons)
+                    feedback = [reason["message"] for reason in reasons]
+                    if any(reason["code"] in CHANGE_SOURCE_CODES for reason in reasons):
+                        break
+                    continue
+                question.update(
                     {
-                        key: source_unit[key]
-                        for key in [
-                            "id",
-                            "material_id",
-                            "material_name",
-                            "file_type",
-                            "line_basis",
-                            "text",
-                            "page_number",
-                            "line_start",
-                            "line_end",
-                            "char_start",
-                            "char_end",
-                            "slide_number",
-                            "sheet_name",
-                            "cell_range",
-                            "source_url",
-                        ]
-                        if key in source_unit
-                    }
-                ]
-                body_length = len(str(item.get("body") or ""))
-                if (
-                    abs(body_length - recipe["body_length"])
-                    > recipe["body_length"] * 0.6
-                ):
-                    warnings.append("問題文の長さが指定から離れています")
-                try:
-                    q = Question(
-                        **{
-                            **item,
-                            "parent": f"第{item_index // recipe['sub_count'] + 1}問",
-                            "id": db.uid(),
-                            "category": recipe["category"],
-                            "recipe_id": recipe["id"],
-                            "question_set_id": set_id,
-                            "score_weight": recipe["score_weight"],
-                            "source_references": refs,
-                            "warnings": warnings,
-                        }
-                    ).model_dump()
-                except (ValidationError, TypeError) as e:
-                    rejected.append(item)
-                    if attempt >= MAX_DUPLICATE_RETRIES:
-                        raise HTTPException(
-                            422,
-                            "問題形式の候補を作れませんでした。生成条件を確認してください。",
-                        ) from e
-                    item = regenerate_question_candidate(
-                        recipe,
-                        [*existing_questions, *pending],
-                        rejected,
-                        source_unit,
-                        ["必須項目と選択肢・正解の整合性を満たすJSONを返してください"],
-                    )
-                    continue
-                if q["question_type"] != recipe["question_type"]:
-                    rejected.append(q)
-                    if attempt >= MAX_DUPLICATE_RETRIES:
-                        raise HTTPException(
-                            422,
-                            "生成問題形式がレシピと一致しません。生成条件を確認してください。",
-                        )
-                    item = regenerate_question_candidate(
-                        recipe,
-                        [*existing_questions, *pending],
-                        rejected,
-                        source_unit,
-                        [f"question_typeは{recipe['question_type']}にしてください"],
-                    )
-                    continue
-
-                answer_forms = [q["answer"], *q["accepted_answers"]]
-                if any(
-                    answer_appears_in_body(q["body"], answer_form)
-                    for answer_form in answer_forms
-                ):
-                    rejected.append(q)
-                    if attempt >= MAX_DUPLICATE_RETRIES:
-                        raise HTTPException(
-                            422,
-                            "問題文に正解が含まれない候補を作れませんでした。資料範囲を変えて再試行してください。",
-                        )
-                    item = regenerate_question_candidate(
-                        recipe,
-                        [*existing_questions, *pending],
-                        rejected,
-                        source_unit,
-                        [
-                            "問題文に正答または正答と同じ数値が含まれています。正解を本文に出さずに問う問題へ作り直してください。"
-                        ],
-                    )
-                    continue
-
-                known_questions = [*existing_questions, *pending]
-                duplicate = duplicate_question(q, known_questions)
-                if duplicate:
-                    rejected.append(q)
-                    if attempt >= MAX_DUPLICATE_RETRIES:
-                        raise HTTPException(
-                            409,
-                            "既存問題と重複しない候補を作れませんでした。生成条件または資料範囲を変えて再試行してください。今回の生成分は保存していません。",
-                        )
-                    item = regenerate_question_candidate(
-                        recipe,
-                        known_questions,
-                        rejected,
-                        source_unit,
-                        ["問題文と正解が既存問題と同じです。資料中の別の事実を問う問題にしてください"],
-                    )
-                    continue
-
-                q["warnings"] = warnings
-                q.update(
-                    {
+                        "question_set_id": set_id,
+                        "quality_version": QUALITY_VERSION,
+                        "quality_review": review,
+                        "warnings": unique_strings(
+                            [*question["warnings"], *review["warnings"]]
+                        ),
                         "created_at": db.now(),
                         "updated_at": db.now(),
                         "provider": provider().name,
@@ -1261,81 +1359,107 @@ def _generate(
                         "prompt_version": PROMPT_VERSION,
                     }
                 )
+                pending.append(question)
+                set_questions.append(question)
+                used_chunks[unit["id"]] = unit
+                accepted = True
                 break
-            pending.append(q)
-        sets.append(
-            {
-                "id": set_id,
-                "name": recipe["name"] + f" / {set_name_offset + n + 1}",
-                "recipe_id": recipe["id"],
-                "created_at": db.now(),
-                "prompt_version": PROMPT_VERSION,
-                "generation_status": "complete",
-                "question_count": question_count,
-                "generation_scope": {
-                    "flow": recipe.get("generation_flow", "recipe"),
-                    "category": recipe["category"],
-                    "all_categories": recipe.get("all_categories", False),
-                    "question_type": recipe["question_type"],
-                    "difficulty": recipe["difficulty"],
-                },
-                "material_ids": list(
-                    dict.fromkeys(c["material_id"] for c in chunks)
-                ),
-                "material_names": list(
-                    dict.fromkeys(c["material_name"] for c in chunks)
-                ),
-                "source_chunk_count": len(chunks),
-                "used_chunk_count": len(used_chunks),
-                "used_source_locations": [
-                    {
-                        key: source_unit[key]
-                        for key in (
-                            "id",
-                            "material_id",
-                            "material_name",
-                            "page_number",
-                            "line_start",
-                            "line_end",
-                            "char_start",
-                            "char_end",
-                            "slide_number",
-                            "sheet_name",
-                            "cell_range",
-                        )
-                        if key in source_unit
-                    }
-                    for source_unit in used_chunks.values()
-                ],
-            }
-        )
-    # Commit the entire generation atomically, including question sets.
-    with db.connect() as c:
-        c.execute("BEGIN IMMEDIATE")
-        stored_questions = [
-            json.loads(row[0])
-            for row in c.execute(
-                "SELECT payload FROM entities WHERE kind=?", ("questions",)
+            if not accepted:
+                budget.blocked_sources.add(unit["id"])
+        if set_questions:
+            sets.append(
+                {
+                    "id": set_id,
+                    "name": recipe["name"] + f" / {set_name_offset + n + 1}",
+                    "recipe_id": recipe["id"],
+                    "created_at": db.now(),
+                    "prompt_version": PROMPT_VERSION,
+                    "quality_version": QUALITY_VERSION,
+                    "generation_status": "complete"
+                    if len(set_questions) == target_per_set
+                    else "partial",
+                    "requested_count": target_per_set,
+                    "question_count": len(set_questions),
+                    "accepted_count": len(set_questions),
+                    "rejected_count": budget.rejected_count - set_rejected_before,
+                    "stop_reason": stop_reason,
+                    "generation_scope": {
+                        "flow": recipe.get("generation_flow", "recipe"),
+                        "category": recipe["category"],
+                        "all_categories": recipe.get("all_categories", False),
+                        "question_type": recipe["question_type"],
+                        "difficulty": recipe["difficulty"],
+                    },
+                    "material_ids": list(
+                        dict.fromkeys(unit["material_id"] for unit in chunks)
+                    ),
+                    "material_names": list(
+                        dict.fromkeys(unit["material_name"] for unit in chunks)
+                    ),
+                    "source_chunk_count": len(chunks),
+                    "used_chunk_count": len(used_chunks),
+                    "used_source_locations": [
+                        {
+                            key: unit[key]
+                            for key in (
+                                "id",
+                                "material_id",
+                                "material_name",
+                                "page_number",
+                                "line_start",
+                                "line_end",
+                                "char_start",
+                                "char_end",
+                                "slide_number",
+                                "sheet_name",
+                                "cell_range",
+                            )
+                            if key in unit
+                        }
+                        for unit in used_chunks.values()
+                    ],
+                }
             )
-        ]
-        commit_scope = list(stored_questions)
-        for question in pending:
-            if any(is_exact_duplicate(question, stored) for stored in commit_scope):
-                raise HTTPException(
-                    409,
-                    "保存直前に既存問題との重複が見つかりました。生成し直してください。今回の生成分は保存していません。",
+        if stop_reason != "target_reached":
+            break
+    # Save only reviewed questions, atomically with their non-empty sets.
+    if pending:
+        if progress:
+            progress("saving", len(pending))
+        with db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored_questions = [
+                json.loads(row[0])
+                for row in connection.execute(
+                    "SELECT payload FROM entities WHERE kind=?",
+                    ("questions",),
                 )
-            commit_scope.append(question)
-        records = [("questions", pending), ("sets", sets)]
-        if persist_recipe:
-            records.append(("recipes", [recipe]))
-        for kind, items in records:
-            for item in items:
-                c.execute(
-                    "INSERT INTO entities VALUES (?,?,?)",
-                    (kind, item["id"], json.dumps(item, ensure_ascii=False)),
-                )
-    return {"questions": pending, "sets": sets}
+            ]
+            for question in pending:
+                if duplicate_question(question, stored_questions):
+                    raise HTTPException(
+                        409,
+                        "保存直前に重複が見つかりました。今回の生成分は保存していません。",
+                    )
+                stored_questions.append(question)
+            records = [("questions", pending), ("sets", sets)]
+            if persist_recipe:
+                records.append(("recipes", [recipe]))
+            for kind, items in records:
+                for item in items:
+                    connection.execute(
+                        "INSERT INTO entities VALUES (?,?,?)",
+                        (kind, item["id"], json.dumps(item, ensure_ascii=False)),
+                    )
+    return {
+        "questions": pending,
+        "sets": sets,
+        "requested_count": requested_count,
+        "accepted_count": len(pending),
+        "rejected_count": budget.rejected_count - rejected_before,
+        "attempted_count": budget.attempted_count - attempted_before,
+        "stop_reason": stop_reason,
+    }
 
 
 @app.post("/api/generate")
@@ -1347,7 +1471,9 @@ def generation(g: Generation):
 
 
 def prepare_direct_generation(request: DirectGeneration):
-    if len(set(request.material_ids)) != len(request.material_ids) or any(not id.strip() for id in request.material_ids):
+    if len(set(request.material_ids)) != len(request.material_ids) or any(
+        not id.strip() for id in request.material_ids
+    ):
         raise HTTPException(422, "使用する資料を選び直してください")
     if request.question_type not in ("choice", "blank", "word", "short"):
         raise HTTPException(422, "問題形式を選び直してください")
@@ -1365,11 +1491,13 @@ def prepare_direct_generation(request: DirectGeneration):
         sub_count=min(request.question_count, 20),
         difficulty=request.difficulty,
     ).model_dump()
-    recipe.update({
-        "created_at": db.now(),
-        "updated_at": db.now(),
-        "generation_flow": "direct",
-    })
+    recipe.update(
+        {
+            "created_at": db.now(),
+            "updated_at": db.now(),
+            "generation_flow": "direct",
+        }
+    )
     existing_recipe = next(
         (item for item in db.all_items("recipes") if item["id"] == recipe_id),
         None,
@@ -1412,9 +1540,9 @@ def prepare_direct_generation(request: DirectGeneration):
     previous_question_counts = {}
     for item in db.all_items("questions"):
         question_set_id = item.get("question_set_id")
-        previous_question_counts[question_set_id] = previous_question_counts.get(
-            question_set_id, 0
-        ) + 1
+        previous_question_counts[question_set_id] = (
+            previous_question_counts.get(question_set_id, 0) + 1
+        )
     previous_question_count = sum(
         set_item.get("question_count", previous_question_counts.get(set_item["id"], 0))
         for set_item in previous_sets
@@ -1422,13 +1550,17 @@ def prepare_direct_generation(request: DirectGeneration):
     return recipe, existing_recipe is None, previous_question_count, len(previous_sets)
 
 
-def run_direct_generation(request: DirectGeneration):
-    recipe, persist_recipe, previous_question_count, previous_set_count = prepare_direct_generation(request)
+def run_direct_generation(request: DirectGeneration, budget=None, progress=None):
+    recipe, persist_recipe, previous_question_count, previous_set_count = (
+        prepare_direct_generation(request)
+    )
     return generate(
         recipe,
         persist_recipe=persist_recipe,
         source_question_offset=previous_question_count,
         set_name_offset=previous_set_count,
+        budget=budget,
+        progress=progress,
     )
 
 
@@ -1447,69 +1579,132 @@ def save_generation_job(job_id, **changes):
 
 
 def fail_generation_job(job_id, error):
-    save_generation_job(job_id, status="failed", error=str(error))
+    save_generation_job(job_id, status="failed", stage="finished", error=str(error))
+
+
+def generation_progress(job_id, budget, saved_count):
+    def update(stage, pending_count):
+        save_generation_job(
+            job_id,
+            stage=stage,
+            reviewed_count=saved_count + pending_count,
+            attempted_count=budget.attempted_count,
+            rejected_count=budget.rejected_count,
+        )
+
+    return update
 
 
 def run_direct_generation_job(job_id, payload):
-    save_generation_job(job_id, status="running", error="")
-    completed = 0
-    set_ids = []
+    save_generation_job(job_id, status="running", stage="generating", error="")
+    completed, set_ids = 0, []
+    budget = GenerationBudget(payload["question_count"])
     try:
         recipe_id = payload["recipe_id"]
+        stop_reason = "target_reached"
         while completed < payload["question_count"]:
             count = min(20, payload["question_count"] - completed)
             request = DirectGeneration.model_validate(
                 {**payload, "recipe_id": recipe_id, "question_count": count}
             )
-            result = run_direct_generation(request)
+            result = run_direct_generation(
+                request, budget, generation_progress(job_id, budget, completed)
+            )
             if not recipe_id and result["sets"]:
                 recipe_id = result["sets"][0]["recipe_id"]
-            completed += len(result["questions"])
+            completed += result["accepted_count"]
             set_ids.extend(item["id"] for item in result["sets"])
+            stop_reason = result["stop_reason"]
             save_generation_job(
                 job_id,
                 completed=completed,
+                accepted_count=completed,
+                reviewed_count=completed,
+                rejected_count=budget.rejected_count,
+                attempted_count=budget.attempted_count,
                 set_ids=list(dict.fromkeys(set_ids)),
             )
-        save_generation_job(job_id, status="complete", completed=payload["question_count"])
+            if stop_reason != "target_reached":
+                break
+        save_generation_job(
+            job_id,
+            status="complete" if completed == payload["question_count"] else "partial",
+            stage="finished",
+            completed=completed,
+            stop_reason=stop_reason,
+        )
     except HTTPException as error:
         fail_generation_job(job_id, error.detail)
     except Exception:
         logger.exception("Direct generation job %s failed", job_id)
-        fail_generation_job(job_id, "生成処理に失敗しました。条件を確認して再試行してください")
+        fail_generation_job(
+            job_id, "生成処理に失敗しました。条件を確認して再試行してください"
+        )
 
 
 def run_recipe_generation_job(job_id, recipe, set_count):
-    save_generation_job(job_id, status="running", error="")
-    set_ids = []
+    save_generation_job(job_id, status="running", stage="generating", error="")
+    set_ids, accepted_count = [], 0
+    budget = GenerationBudget(recipe["major_count"] * recipe["sub_count"] * set_count)
     try:
         for index in range(set_count):
-            result = generate(recipe, count=1, set_name_offset=index)
+            result = generate(
+                recipe,
+                count=1,
+                set_name_offset=index,
+                budget=budget,
+                progress=generation_progress(job_id, budget, accepted_count),
+            )
             set_ids.extend(item["id"] for item in result["sets"])
+            accepted_count += result["accepted_count"]
             save_generation_job(
                 job_id,
                 completed=index + 1,
+                accepted_count=accepted_count,
+                reviewed_count=accepted_count,
+                rejected_count=budget.rejected_count,
+                attempted_count=budget.attempted_count,
                 set_ids=list(dict.fromkeys(set_ids)),
+                stop_reason=result["stop_reason"],
             )
-        save_generation_job(job_id, status="complete", completed=set_count)
+            if result["stop_reason"] != "target_reached":
+                break
+        save_generation_job(
+            job_id,
+            status="complete"
+            if accepted_count == budget.requested_count
+            else "partial",
+            stage="finished",
+        )
     except HTTPException as error:
         fail_generation_job(job_id, error.detail)
     except Exception:
         logger.exception("Recipe generation job %s failed", job_id)
-        fail_generation_job(job_id, "生成処理に失敗しました。条件を確認して再試行してください")
+        fail_generation_job(
+            job_id, "生成処理に失敗しました。条件を確認して再試行してください"
+        )
 
 
-def create_generation_job(kind, total):
+def create_generation_job(kind, total, requested_count=None):
     return db.put(
         "generation_jobs",
         {
             "id": db.uid(),
             "kind": kind,
             "status": "queued",
+            "stage": "waiting",
             "total": total,
             "completed": 0,
+            "requested_count": requested_count
+            if requested_count is not None
+            else total,
+            "accepted_count": 0,
+            "reviewed_count": 0,
+            "attempted_count": 0,
+            "rejected_count": 0,
             "set_ids": [],
             "error": "",
+            "quality_version": QUALITY_VERSION,
         },
     )
 
@@ -1527,7 +1722,9 @@ def generation_job(job_id: str):
 
 
 @app.post("/api/generation-jobs/direct", status_code=202)
-def queue_direct_generation(request: DirectGeneration, background_tasks: BackgroundTasks):
+def queue_direct_generation(
+    request: DirectGeneration, background_tasks: BackgroundTasks
+):
     recipe_id = request.recipe_id.strip() or db.uid()
     payload = {**request.model_dump(), "recipe_id": recipe_id}
     job = create_generation_job("direct", request.question_count)
@@ -1540,8 +1737,14 @@ def queue_recipe_generation(request: Generation, background_tasks: BackgroundTas
     recipe = require("recipes", request.recipe_id)
     if request.material_ids is not None:
         recipe = {**recipe, "material_ids": request.material_ids}
-    job = create_generation_job("recipe", request.count)
-    background_tasks.add_task(run_recipe_generation_job, job["id"], recipe, request.count)
+    job = create_generation_job(
+        "recipe",
+        request.count,
+        recipe["major_count"] * recipe["sub_count"] * request.count,
+    )
+    background_tasks.add_task(
+        run_recipe_generation_job, job["id"], recipe, request.count
+    )
     return job
 
 
@@ -1550,11 +1753,14 @@ def queue_question_regeneration(id: str, background_tasks: BackgroundTasks):
     old = require("questions", id)
     recipe = {**require("recipes", old["recipe_id"]), "major_count": 1, "sub_count": 1}
     material_ids = [
-        reference.get("material_id")
-        for reference in old.get("source_references", [])
+        reference.get("material_id") for reference in old.get("source_references", [])
     ]
-    recipe["material_ids"] = unique_strings(material_ids) or recipe.get("material_ids", [])
-    job = create_generation_job("recipe", 1)
+    recipe["material_ids"] = unique_strings(material_ids) or recipe.get(
+        "material_ids", []
+    )
+    job = create_generation_job(
+        "recipe", 1, recipe["major_count"] * recipe["sub_count"]
+    )
     background_tasks.add_task(run_recipe_generation_job, job["id"], recipe, 1)
     return job
 
@@ -1563,9 +1769,7 @@ def queue_question_regeneration(id: str, background_tasks: BackgroundTasks):
 def regenerate(id: str):
     old = require("questions", id)
     r = {**require("recipes", old["recipe_id"]), "major_count": 1, "sub_count": 1}
-    material_ids = [
-        ref.get("material_id") for ref in old.get("source_references", [])
-    ]
+    material_ids = [ref.get("material_id") for ref in old.get("source_references", [])]
     r["material_ids"] = unique_strings(material_ids) or r.get("material_ids", [])
     return generate(r)
 

@@ -25,6 +25,8 @@ class Question(BaseModel):
     parent: str = "第1問"
     score_weight: float = Field(default=1, gt=0, le=100)
     grading_rubric: str = ""
+    quality_version: str = ""
+    quality_review: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_choice(self):

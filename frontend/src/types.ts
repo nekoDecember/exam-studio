@@ -20,6 +20,8 @@ export type Question = {
   parent: string;
   score_weight: number;
   grading_rubric: string;
+  quality_version?: string;
+  quality_review?: Record<string, any>;
 };
 export type Result = {
   correct: boolean | null;
@@ -89,9 +91,15 @@ export type Data = {
 export type GenerationJob = {
   id: string;
   kind: "direct" | "recipe";
-  status: "queued" | "running" | "complete" | "failed";
+  status: "queued" | "running" | "complete" | "partial" | "failed";
   total: number;
   completed: number;
+  requested_count?: number;
+  accepted_count?: number;
+  reviewed_count?: number;
+  rejected_count?: number;
+  stage?: "waiting" | "generating" | "reviewing" | "saving" | "finished";
+  stop_reason?: "target_reached" | "candidate_exhausted" | "attempt_limit";
   set_ids: string[];
   error?: string;
   created_at?: string;

@@ -1,0 +1,722 @@
+[
+  {
+    "id": "metadata-1",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "この資料の書類名は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "統合報告書",
+      "accepted_answers": [],
+      "explanation": "この資料は当社の統合報告書です。事業戦略と業績を報告しています。"
+    },
+    "evidence": [
+      {
+        "text": "この資料は当社の統合報告書です。事業戦略と業績を報告しています。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-2",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "資料のタイトルは何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "価値創造への道",
+      "accepted_answers": [],
+      "explanation": "資料のタイトルは「価値創造への道」です。経営戦略の説明を掲載しています。"
+    },
+    "evidence": [
+      {
+        "text": "資料のタイトルは「価値創造への道」です。経営戦略の説明を掲載しています。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-3",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "この文書の名前は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "経営報告",
+      "accepted_answers": [],
+      "explanation": "この文書の名前は経営報告です。経営に関する重要な数値を説明します。"
+    },
+    "evidence": [
+      {
+        "text": "この文書の名前は経営報告です。経営に関する重要な数値を説明します。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-4",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "資料名として何が記載されていますか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "年度報告",
+      "accepted_answers": [],
+      "explanation": "資料名として年度報告と記載されています。年度の業績を説明する資料です。"
+    },
+    "evidence": [
+      {
+        "text": "資料名として年度報告と記載されています。年度の業績を説明する資料です。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-5",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "入力した資料のファイル名は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "report.pdf",
+      "accepted_answers": [],
+      "explanation": "入力した資料のファイル名はreport.pdfです。報告書には業績指標が記載されています。"
+    },
+    "evidence": [
+      {
+        "text": "入力した資料のファイル名はreport.pdfです。報告書には業績指標が記載されています。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-6",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "この報告書の題名は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "未来への挑戦",
+      "accepted_answers": [],
+      "explanation": "この報告書の題名は未来への挑戦です。事業戦略の概要を記載しています。"
+    },
+    "evidence": [
+      {
+        "text": "この報告書の題名は未来への挑戦です。事業戦略の概要を記載しています。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-7",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "このページの見出しは何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "成長戦略",
+      "accepted_answers": [],
+      "explanation": "このページの見出しは成長戦略です。海外市場を重点市場としています。"
+    },
+    "evidence": [
+      {
+        "text": "このページの見出しは成長戦略です。海外市場を重点市場としています。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-8",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "この説明は何ページに記載されていますか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "12",
+      "accepted_answers": [],
+      "explanation": "説明は12ページに記載されています。事故発生時は直ちに上長へ報告します。"
+    },
+    "evidence": [
+      {
+        "text": "説明は12ページに記載されています。事故発生時は直ちに上長へ報告します。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-9",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "資料のページ数はいくつですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "60",
+      "accepted_answers": [],
+      "explanation": "資料のページ数は60です。内容は経営戦略と財務情報です。"
+    },
+    "evidence": [
+      {
+        "text": "資料のページ数は60です。内容は経営戦略と財務情報です。"
+      }
+    ]
+  },
+  {
+    "id": "metadata-10",
+    "acceptable": false,
+    "reason_code": "document_metadata",
+    "question": {
+      "body": "What is the title of this document?",
+      "question_type": "word",
+      "choices": [],
+      "answer": "Annual report",
+      "accepted_answers": [],
+      "explanation": "The title of this document is Annual report. It explains business strategy."
+    },
+    "evidence": [
+      {
+        "text": "The title of this document is Annual report. It explains business strategy."
+      }
+    ]
+  },
+  {
+    "id": "visual-1",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "このグラフの目盛りは何本ありますか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-2",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "グラフのメモリ数は何個ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-3",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "資料のグラフの目盛りの本数はいくつですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-4",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "縦軸の目盛は何個ありますか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-5",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "横軸の目盛りの数はいくつですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-6",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "グラフのメモリーは何本ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-7",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "図の格子線は何本ありますか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-8",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "グリッド線の本数はいくつですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-9",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "How many tick marks are in this chart?",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "visual-10",
+    "acceptable": false,
+    "reason_code": "visual_trivia",
+    "question": {
+      "body": "What is the number of gridlines in the graph?",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+    },
+    "evidence": [
+      {
+        "text": "売上の推移を示すグラフには目盛りと格子線が5本あります。売上は前年度を上回りました。"
+      }
+    ]
+  },
+  {
+    "id": "useful-1",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "中期計画の営業利益率目標は何%ですか。単位は不要です。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "12",
+      "accepted_answers": [],
+      "explanation": "中期計画の営業利益率目標は12%です。"
+    },
+    "evidence": [
+      {
+        "text": "中期計画の営業利益率目標は12%です。"
+      }
+    ]
+  },
+  {
+    "id": "useful-2",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "2030年度の海外売上構成比目標は何%ですか。単位は不要です。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "40",
+      "accepted_answers": [],
+      "explanation": "2030年度の海外売上構成比目標は40%と定めています。"
+    },
+    "evidence": [
+      {
+        "text": "2030年度の海外売上構成比目標は40%と定めています。"
+      }
+    ]
+  },
+  {
+    "id": "useful-3",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "設備投資の重点対象となる事業は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "再生可能エネルギー事業",
+      "accepted_answers": [],
+      "explanation": "設備投資は再生可能エネルギー事業へ重点的に配分する。"
+    },
+    "evidence": [
+      {
+        "text": "設備投資は再生可能エネルギー事業へ重点的に配分する。"
+      }
+    ]
+  },
+  {
+    "id": "useful-4",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "最も売上構成比が高い事業は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "製造事業",
+      "accepted_answers": [],
+      "explanation": "製造事業は全社売上の60%を占め、事業別で最大です。"
+    },
+    "evidence": [
+      {
+        "text": "製造事業は全社売上の60%を占め、事業別で最大です。"
+      }
+    ]
+  },
+  {
+    "id": "useful-5",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "今期の利益増加の主な要因は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "原材料費の低下",
+      "accepted_answers": [],
+      "explanation": "今期の利益増加は原材料費の低下によるものです。"
+    },
+    "evidence": [
+      {
+        "text": "今期の利益増加は原材料費の低下によるものです。"
+      }
+    ]
+  },
+  {
+    "id": "useful-6",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "海外進出に伴う主なリスクは何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "為替変動",
+      "accepted_answers": [],
+      "explanation": "海外進出に伴う主なリスクは為替変動である。"
+    },
+    "evidence": [
+      {
+        "text": "海外進出に伴う主なリスクは為替変動である。"
+      }
+    ]
+  },
+  {
+    "id": "useful-7",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "個人情報の管理責任者は誰ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "部門長",
+      "accepted_answers": [],
+      "explanation": "個人情報の管理責任者は部門長とする。"
+    },
+    "evidence": [
+      {
+        "text": "個人情報の管理責任者は部門長とする。"
+      }
+    ]
+  },
+  {
+    "id": "useful-8",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "取締役会の主な役割は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "経営の監督",
+      "accepted_answers": [],
+      "explanation": "取締役会の主な役割は経営の監督である。"
+    },
+    "evidence": [
+      {
+        "text": "取締役会の主な役割は経営の監督である。"
+      }
+    ]
+  },
+  {
+    "id": "useful-9",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "事故発生時の報告先は誰ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "上長",
+      "accepted_answers": [],
+      "explanation": "事故発生時には直ちに上長へ報告する。"
+    },
+    "evidence": [
+      {
+        "text": "事故発生時には直ちに上長へ報告する。"
+      }
+    ]
+  },
+  {
+    "id": "useful-10",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "経費精算で提出が必要な書類名は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "領収書",
+      "accepted_answers": [],
+      "explanation": "経費精算では領収書の提出が必要です。"
+    },
+    "evidence": [
+      {
+        "text": "経費精算では領収書の提出が必要です。"
+      }
+    ]
+  },
+  {
+    "id": "useful-11",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "出張申請に添付する書類名は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "出張計画書",
+      "accepted_answers": [],
+      "explanation": "出張申請には出張計画書を添付しなければならない。"
+    },
+    "evidence": [
+      {
+        "text": "出張申請には出張計画書を添付しなければならない。"
+      }
+    ]
+  },
+  {
+    "id": "useful-12",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "退職時に提出する文書名は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "退職届",
+      "accepted_answers": [],
+      "explanation": "退職時には退職届を提出する必要がある。"
+    },
+    "evidence": [
+      {
+        "text": "退職時には退職届を提出する必要がある。"
+      }
+    ]
+  },
+  {
+    "id": "useful-13",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "申請を受け付ける期限は何日前ですか。単位は不要です。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "7",
+      "accepted_answers": [],
+      "explanation": "申請は実施日の7日前までに提出しなければならない。"
+    },
+    "evidence": [
+      {
+        "text": "申請は実施日の7日前までに提出しなければならない。"
+      }
+    ]
+  },
+  {
+    "id": "useful-14",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "証憑の保存期間は何年ですか。単位は不要です。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "5",
+      "accepted_answers": [],
+      "explanation": "証憑は5年間保存しなければならない。"
+    },
+    "evidence": [
+      {
+        "text": "証憑は5年間保存しなければならない。"
+      }
+    ]
+  },
+  {
+    "id": "useful-15",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "一般申請の承認者は誰ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "部門長",
+      "accepted_answers": [],
+      "explanation": "一般申請は部門長が承認する。"
+    },
+    "evidence": [
+      {
+        "text": "一般申請は部門長が承認する。"
+      }
+    ]
+  },
+  {
+    "id": "useful-16",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "保管が禁止されている情報は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "パスワードの平文",
+      "accepted_answers": [],
+      "explanation": "パスワードの平文は保管してはならない。"
+    },
+    "evidence": [
+      {
+        "text": "パスワードの平文は保管してはならない。"
+      }
+    ]
+  },
+  {
+    "id": "useful-17",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "緊急時に事前承認が不要となる条件は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "人命の危険がある場合",
+      "accepted_answers": [],
+      "explanation": "人命の危険がある場合は緊急対応を優先し、事前承認は不要とする。"
+    },
+    "evidence": [
+      {
+        "text": "人命の危険がある場合は緊急対応を優先し、事前承認は不要とする。"
+      }
+    ]
+  },
+  {
+    "id": "useful-18",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "研修で説明する内部統制の目的は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "業務の適正性確保",
+      "accepted_answers": [],
+      "explanation": "内部統制の目的は業務の適正性確保である。"
+    },
+    "evidence": [
+      {
+        "text": "内部統制の目的は業務の適正性確保である。"
+      }
+    ]
+  },
+  {
+    "id": "useful-19",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "グラフ読解で縦軸は何を表していますか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "売上高",
+      "accepted_answers": [],
+      "explanation": "グラフの読み方を学ぶ。縦軸は売上高を表し、単位は百万円である。"
+    },
+    "evidence": [
+      {
+        "text": "グラフの読み方を学ぶ。縦軸は売上高を表し、単位は百万円である。"
+      }
+    ]
+  },
+  {
+    "id": "useful-20",
+    "acceptable": true,
+    "reason_code": null,
+    "question": {
+      "body": "統合報告書にある重点投資先は何ですか。",
+      "question_type": "word",
+      "choices": [],
+      "answer": "研究開発",
+      "accepted_answers": [],
+      "explanation": "統合報告書にある重点投資先は研究開発である。"
+    },
+    "evidence": [
+      {
+        "text": "統合報告書にある重点投資先は研究開発である。"
+      }
+    ]
+  }
+]
